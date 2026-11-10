@@ -45,6 +45,10 @@ type Store interface {
 	Close() error
 }
 
+// DefaultListLimit is how many runs ListRuns returns when the filter sets no
+// limit. Every Store uses it, so listings do not depend on the implementation.
+const DefaultListLimit = 50
+
 // RunFilter narrows ListRuns. A zero field means "no filter on this".
 type RunFilter struct {
 	Feature     string   // runs with at least one result in this feature

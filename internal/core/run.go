@@ -3,7 +3,9 @@ package core
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Source says where a run's results came from.
@@ -68,6 +70,47 @@ type Run struct {
 	CommitSHA string
 	// Results are the per-test outcomes. Empty for pending and expired runs.
 	Results []Result
+	// Diagnostic is the real cause when the run failed for a reason that
+	// individual results do not explain: the system's error when the command
+	// could not start, the parser's error, the end of the command's output
+	// (cut by TailDiagnostic), or a result source's own response. It is kept
+	// even when some results exist, because a crash after the last test is
+	// when the cause matters most. It must be scrubbed of known secret values
+	// before it is stored. Empty when there is nothing to add.
+	Diagnostic string
+}
+
+// MaxDiagnosticBytes is the most captured output a diagnostic keeps.
+const MaxDiagnosticBytes = 8 * 1024
+
+const diagnosticCutMarker = "[earlier output cut]\n"
+
+// TailDiagnostic keeps the END of captured output, where an error message
+// usually is, to at most MaxDiagnosticBytes of the original text, so a command
+// that prints megabytes cannot swell the history file. When it cuts it starts
+// at a character boundary (never inside a multi-byte character) and puts a
+// marker line first, so a reader knows the beginning is missing. Text that
+// already fits is returned unchanged.
+func TailDiagnostic(s string) string {
+	if len(s) <= MaxDiagnosticBytes {
+		return s
+	}
+	tail := s[len(s)-MaxDiagnosticBytes:]
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return diagnosticCutMarker + tail
+}
+
+// reasonOr returns the last non-empty line of the diagnostic, which is where
+// an error message usually ends up, or generic when there is no diagnostic.
+// The real cause replaces the generic wording instead of sitting beside it.
+func (r Run) reasonOr(generic string) string {
+	lines := strings.Split(strings.TrimSpace(r.Diagnostic), "\n")
+	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+		return last
+	}
+	return generic
 }
 
 // Key returns the identity of a remote run, "<external id>#<attempt>", and
@@ -125,6 +168,10 @@ type Verdict struct {
 //     parsed result passed (a crash after the last test must not look green).
 //  3. A run with no results at all fails with "no results", so a command that
 //     prints nothing is never shown as a pass.
+//
+// In steps 2 and 3, when the run has a Diagnostic, the reason is the last line
+// of it (the real cause) instead of the generic wording. Failed results keep
+// their own reason in step 4; the diagnostic is still stored beside them.
 //  4. Any failed or errored result fails the run.
 //  5. Otherwise the run passes. Skipped results do not count against it.
 func (r Run) Verdict() Verdict {
@@ -135,10 +182,10 @@ func (r Run) Verdict() Verdict {
 		return Verdict{Outcome: OutcomeUndetermined, Reason: "results expired"}
 	}
 	if r.ExitCode != 0 {
-		return Verdict{Outcome: OutcomeFail, Reason: fmt.Sprintf("command exited with code %d", r.ExitCode)}
+		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr(fmt.Sprintf("command exited with code %d", r.ExitCode))}
 	}
 	if len(r.Results) == 0 {
-		return Verdict{Outcome: OutcomeFail, Reason: "no results"}
+		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr("no results")}
 	}
 	failed := 0
 	for _, res := range r.Results {

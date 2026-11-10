@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseStatus(t *testing.T) {
@@ -127,6 +128,82 @@ func TestRunVerdict(t *testing.T) {
 				t.Errorf("Reason = %q; want it to contain %q", v.Reason, c.reasonHas)
 			}
 		})
+	}
+}
+
+func TestVerdictShowsTheRealCause(t *testing.T) {
+	cases := []struct {
+		name string
+		run  Run
+		want string
+	}{
+		{
+			"no results, cause known",
+			Run{State: RunComplete, Diagnostic: "tool: could not resolve host\nerror: connection refused\n"},
+			"error: connection refused",
+		},
+		{
+			"non-zero exit with results, cause known",
+			Run{State: RunComplete, ExitCode: 2, Results: []Result{{Status: StatusPass}}, Diagnostic: "panic: boom"},
+			"panic: boom",
+		},
+		{
+			"no diagnostic falls back to the generic reason",
+			Run{State: RunComplete},
+			"no results",
+		},
+		{
+			"a blank diagnostic falls back too",
+			Run{State: RunComplete, Diagnostic: "  \n\n"},
+			"no results",
+		},
+		{
+			"failed tests keep their own reason",
+			Run{State: RunComplete, Results: []Result{{Status: StatusFail}}, Diagnostic: "noise"},
+			"1 of 1 results failed",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := c.run.Verdict()
+			if v.Outcome != OutcomeFail {
+				t.Errorf("Outcome = %q; want %q", v.Outcome, OutcomeFail)
+			}
+			if v.Reason != c.want {
+				t.Errorf("Reason = %q; want %q", v.Reason, c.want)
+			}
+		})
+	}
+}
+
+func TestTailDiagnostic(t *testing.T) {
+	short := "error: nothing to see\n"
+	if got := TailDiagnostic(short); got != short {
+		t.Errorf("short text changed: %q", got)
+	}
+
+	exact := strings.Repeat("x", MaxDiagnosticBytes)
+	if got := TailDiagnostic(exact); got != exact {
+		t.Error("text of exactly the limit must be returned unchanged")
+	}
+
+	long := strings.Repeat("x", MaxDiagnosticBytes) + "THE END"
+	got := TailDiagnostic(long)
+	if !strings.HasSuffix(got, "THE END") {
+		t.Error("the end of the output must be kept: that is where the error is")
+	}
+	if !strings.HasPrefix(got, diagnosticCutMarker) {
+		t.Error("a cut must be marked, so a reader knows the start is missing")
+	}
+	if len(got) > MaxDiagnosticBytes+len(diagnosticCutMarker) {
+		t.Errorf("result is %d bytes; want at most %d plus the marker", len(got), MaxDiagnosticBytes)
+	}
+
+	// 8192 is not a multiple of 3, so cutting a run of 3-byte characters at a
+	// fixed byte offset lands inside one. The result must still be valid text.
+	multi := strings.Repeat("日", MaxDiagnosticBytes)
+	if g := TailDiagnostic(multi); !utf8.ValidString(g) {
+		t.Error("cutting must not split a multi-byte character")
 	}
 }
 

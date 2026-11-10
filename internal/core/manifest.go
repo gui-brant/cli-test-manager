@@ -126,6 +126,10 @@ type PullSpec struct {
 	Workflow string `yaml:"workflow"`
 	// Artifact is the name of the result file attached to a run.
 	Artifact string `yaml:"artifact"`
+	// Environment is the manifest environment the pulled results belong to.
+	// Required: the tester did not start these runs, so nothing else says
+	// which environment they targeted.
+	Environment string `yaml:"environment"`
 	// LookbackDays bounds how far back the first pull goes, so an empty
 	// history does not download months of artifacts.
 	LookbackDays int `yaml:"lookback_days"`

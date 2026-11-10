@@ -1,0 +1,47 @@
+# Example test-manifest.yaml: how a project describes its tests to the tester.
+# The file lives at the project's root. It holds NAMES of secrets, never values.
+# Every value below is a neutral placeholder, not a real project's.
+
+manifest_version: 1
+project: example
+history: .tester/history.sqlite          # relative to this file; the project owns it
+
+features: [accounts, notes]              # `general` always exists, for cross-cutting checks
+
+environments:
+  local:
+    vars:    { BASE_URL: "http://127.0.0.1:8000" }     # not secret, may be committed
+    secrets: []                                        # names only, never values
+  deployed:
+    vars:    { BASE_URL: "https://dev.example.test" }
+    secrets: [ACCOUNT_PASSWORD]
+
+runners:
+  sql:
+    run: ["run-sql-tests", "{files}"]    # an argument list, not a shell string
+    format: tap
+    output: stdout
+    environments: [local]
+    batch: true                          # accepts several files in one call
+    timeout: 10m                         # always write a unit, for example 10m or 90s
+  http:
+    run: ["http-runner", "--report", "{report}", "{files}"]
+    format: junit
+    output: file                         # the tester picks a temporary path for {report}
+    environments: [local, deployed]
+    batch: true
+    timeout: 10m
+
+tests:                                   # append-only: the order is the test numbering
+  - { id: users-table, name: Users table checks, feature: accounts, runner: sql,  file: tests/sql/users_table.sql }
+  - { id: login-flow,  name: Login flow,         feature: accounts, runner: http, file: tests/http/login_flow.http, tag: http }
+  - { id: note-create, name: Create a note,      feature: notes,    runner: http, file: tests/http/note_create.http }
+
+pull:                                    # optional: results produced elsewhere
+  provider: github
+  repo: owner/name
+  workflow: tests.yml
+  artifact: test-results
+  environment: deployed                  # which environment these results belong to
+  lookback_days: 30
+  token: CI_TOKEN                        # a secret NAME; never listed under an environment

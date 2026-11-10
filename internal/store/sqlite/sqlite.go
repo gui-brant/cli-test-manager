@@ -89,15 +89,9 @@ func (s *Store) Close() error { return s.db.Close() }
 // prepare checks that the file is ours (or new), upgrades the tables, and
 // turns on write-ahead logging.
 func (s *Store) prepare(ctx context.Context) error {
-	var appID, version, tables int
-	for pragma, dest := range map[string]*int{
-		"PRAGMA application_id":              &appID,
-		"PRAGMA user_version":                &version,
-		"SELECT count(*) FROM sqlite_master": &tables,
-	} {
-		if err := s.db.QueryRowContext(ctx, pragma).Scan(dest); err != nil {
-			return fmt.Errorf("store: reading the history file: %w", err)
-		}
+	appID, version, tables, err := s.inspect(ctx)
+	if err != nil {
+		return err
 	}
 
 	switch {
@@ -115,6 +109,30 @@ func (s *Store) prepare(ctx context.Context) error {
 		return err
 	}
 	return s.enableWAL(ctx)
+}
+
+// inspect reads the three facts that say whether the file is ours, new or
+// foreign: its marker, its schema version and how many tables it has. They are
+// read in ONE transaction, so they come from the same moment. Read one by one,
+// another program creating the tables in between could make a half-built file
+// look like somebody else's database. The transaction ends before this returns,
+// so it cannot block the upgrade that follows.
+func (s *Store) inspect(ctx context.Context) (appID, version, tables int, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("store: reading the history file: %w", err)
+	}
+	defer tx.Rollback()
+	for pragma, dest := range map[string]*int{
+		"PRAGMA application_id":              &appID,
+		"PRAGMA user_version":                &version,
+		"SELECT count(*) FROM sqlite_master": &tables,
+	} {
+		if err := tx.QueryRowContext(ctx, pragma).Scan(dest); err != nil {
+			return 0, 0, 0, fmt.Errorf("store: reading the history file: %w", err)
+		}
+	}
+	return appID, version, tables, nil
 }
 
 // enableWAL switches the file to write-ahead logging, which lets a push hook, a

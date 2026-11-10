@@ -322,12 +322,13 @@ func TestConcurrentWritersAndAReader(t *testing.T) {
 // Two programs opening a brand-new file together must not both create the
 // tables.
 func TestConcurrentOpenOfANewFile(t *testing.T) {
-	for round := 0; round < 5; round++ {
+	const rounds, openers = 25, 8
+	for round := 0; round < rounds; round++ {
 		path := newPath(t)
-		errs := make(chan error, 4)
-		stores := make(chan *Store, 4)
+		errs := make(chan error, openers)
+		stores := make(chan *Store, openers)
 		var wg sync.WaitGroup
-		for j := 0; j < 4; j++ {
+		for j := 0; j < openers; j++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

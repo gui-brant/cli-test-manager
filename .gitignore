@@ -1,0 +1,7 @@
+# Default location of a project's run history (the project owns the file).
+.tester/
+
+# Build output.
+/bin/
+*.test
+*.out

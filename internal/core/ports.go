@@ -56,7 +56,7 @@ type RunFilter struct {
 	Source      Source   // local or remote
 	State       RunState // for example RunPending, to find runs to re-check
 	TestID      string   // runs that include this test
-	Limit       int      // maximum rows; zero means the implementation's default
+	Limit       int      // maximum rows; zero or less means DefaultListLimit
 	Offset      int      // rows to skip, for paging through long histories
 }
 
@@ -155,7 +155,11 @@ type Invocation struct {
 	// shell is involved. If WantsReport is true, any argument equal to
 	// PlaceholderReport is replaced by the runner with a temporary file path.
 	Args []string
-	// Env is the environment for the command, as "NAME=value" entries.
+	// Env is the environment for the command, as "NAME=value" entries. It is
+	// EXACTLY what the command gets: the runner never adds the tester's own
+	// environment, and nil or empty means an empty environment. The caller
+	// decides what to pass, so secrets that do not belong to a run never reach
+	// its command.
 	Env []string
 	// Dir is the working folder, normally the project root.
 	Dir string
@@ -174,6 +178,10 @@ type Output struct {
 	ExitCode int
 	// TimedOut is true when the command was stopped for running too long.
 	TimedOut bool
+	// Truncated is true when part of the output was dropped to bound memory:
+	// each stream keeps its start and its end, with a marker line between, and
+	// the result file keeps its start.
+	Truncated bool
 	// Report is the content of the temporary result file, when WantsReport was
 	// set and the command wrote one.
 	Report []byte
@@ -184,6 +192,11 @@ type Runner interface {
 	// Run starts the command. It returns an error only when the command could
 	// not be started at all (program not found, not executable). A command that
 	// ran and exited non-zero, or was stopped by the timeout, is NOT an error:
-	// that is reported in Output.
+	// that is reported in Output. A command killed by a signal has the exit
+	// code 128 plus the signal number.
+	//
+	// If ctx is cancelled, the command is stopped (as for a timeout, but
+	// TimedOut stays false) and Run returns the output so far together with an
+	// error wrapping ctx's error.
 	Run(ctx context.Context, inv Invocation) (Output, error)
 }

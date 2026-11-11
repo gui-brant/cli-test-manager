@@ -140,7 +140,7 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 		}
 		emit(Event{Kind: EventStarted, Test: t, Index: i + 1, Total: total})
 
-		results, fail, err := s.runOne(ctx, req, p, t)
+		results, fail, details, err := s.runOne(ctx, req, p, t)
 		if err != nil {
 			return cancelled(i, err)
 		}
@@ -153,20 +153,25 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 			if run.ExitCode == 0 {
 				run.ExitCode = fail.exitCode
 			}
-			block := fmt.Sprintf("[%s] %s", t.ID, fail.cause)
+			// The cause is already on the test's error row. The diagnostic keeps
+			// the command's output only when there is more of it than that one
+			// line; otherwise it would say the same thing twice.
 			if fail.output != "" {
-				block += "\n" + fail.output
+				diagnostics = append(diagnostics, fmt.Sprintf("[%s] %s\n%s", t.ID, fail.cause, fail.output))
 			}
-			diagnostics = append(diagnostics, block)
 			done.Failed, done.Reason = true, fail.cause
 		} else if n := failedCount(results); n > 0 {
 			done.Failed, done.Reason = true, fmt.Sprintf("%d of %d results failed", n, len(results))
 		}
+		// What the test tool said beyond each failure's short message (a stack
+		// trace, say) belongs in the diagnostic, not on the result's row.
+		diagnostics = append(diagnostics, details...)
 		emit(done)
 	}
 
 	run.FinishedAt = s.now()
-	// One block per failed test, with a blank line between blocks.
+	// One block for each thing that has more to say than its row does, with a
+	// blank line between blocks. A run where nothing does has no diagnostic.
 	run.Diagnostic = core.TailDiagnostic(strings.TrimRight(strings.Join(diagnostics, "\n\n"), "\n"))
 
 	id, err := s.Store.SaveRun(ctx, run)

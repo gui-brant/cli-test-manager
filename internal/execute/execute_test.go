@@ -536,7 +536,9 @@ func TestFailuresThatTheResultsDoNotExplain(t *testing.T) {
 			if run.ExitCode != c.wantExit {
 				t.Errorf("run exit code %d; want %d", run.ExitCode, c.wantExit)
 			}
-			if !strings.Contains(run.Diagnostic, "["+test.ID+"]") {
+			// A diagnostic exists only when the command printed more than the one
+			// line already on the error row; when there is one, it names the test.
+			if run.Diagnostic != "" && !strings.Contains(run.Diagnostic, "["+test.ID+"]") {
 				t.Errorf("diagnostic %q does not name the test", run.Diagnostic)
 			}
 			v := run.Verdict()
@@ -558,9 +560,9 @@ func TestDiagnosticHasOneBlockPerFailedTest(t *testing.T) {
 	f.runner.reply = func(n int, inv core.Invocation) (core.Output, error) {
 		switch n {
 		case 1:
-			return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("Error: no such table: log\n"), ExitCode: 2}, nil
+			return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("context one\ncontext two\nError: no such table: log\n"), ExitCode: 2}, nil
 		case 2:
-			return core.Output{Stdout: []byte("# warming up\n"), TimedOut: true, ExitCode: 143}, nil
+			return core.Output{Stdout: []byte("# warming up\n# still going\n"), TimedOut: true, ExitCode: 143}, nil
 		}
 		return defaultReply(n, inv)
 	}
@@ -574,11 +576,49 @@ func TestDiagnosticHasOneBlockPerFailedTest(t *testing.T) {
 		!strings.HasPrefix(blocks[1], "[login-flow] timed out after") {
 		t.Errorf("blocks %q do not start with the test and its cause", blocks)
 	}
+	if !strings.Contains(blocks[0], "context one\ncontext two") || !strings.Contains(blocks[1], "# warming up") {
+		t.Errorf("blocks %q lack the output that came before each cause", blocks)
+	}
 	if strings.Contains(run.Diagnostic, "1..1") {
 		t.Errorf("the diagnostic shows a TAP plan line: %q", run.Diagnostic)
 	}
 	if n := strings.Count(run.Diagnostic, "no such table"); n != 1 {
 		t.Errorf("the cause appears %d times; want once: %q", n, run.Diagnostic)
+	}
+}
+
+// When a command's whole output is the one line already on the error row, the
+// diagnostic would only say it twice, so the run has none.
+func TestNoDiagnosticWhenItWouldOnlyRepeatTheRow(t *testing.T) {
+	f := newFixture(t)
+	f.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("kaboom\n"), ExitCode: 2}, nil
+	}
+	run := f.mustRun("local", Selection{TestIDs: []string{"users-table"}}).Run
+	if run.Diagnostic != "" {
+		t.Errorf("diagnostic %q; want none", run.Diagnostic)
+	}
+	if len(run.Results) != 1 || !strings.Contains(run.Results[0].Message, "kaboom") {
+		t.Errorf("results %+v; want the one error row carrying the cause", run.Results)
+	}
+}
+
+// What a test tool says beyond a failure's short message (a stack trace, say)
+// goes to the diagnostic, headed by the test and the result; the result's row
+// keeps only the short message.
+func TestAToolsLongDetailGoesToTheDiagnosticNotTheRow(t *testing.T) {
+	f := newFixture(t)
+	f.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		report := "<testsuites><testcase name=\"rejects it\"><failure message=\"expected 401\">expected 401\n  at login.js:10</failure></testcase></testsuites>"
+		return core.Output{Report: []byte(report)}, nil
+	}
+	run := f.mustRun("local", Selection{TestIDs: []string{"login-flow"}}).Run
+
+	if len(run.Results) != 1 || run.Results[0].Message != "expected 401" {
+		t.Fatalf("results %+v; want one failed result with only the short message", run.Results)
+	}
+	if want := "[login-flow] rejects it\nat login.js:10"; run.Diagnostic != want {
+		t.Errorf("diagnostic %q; want %q", run.Diagnostic, want)
 	}
 }
 

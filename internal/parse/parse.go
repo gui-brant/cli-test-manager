@@ -19,6 +19,11 @@ type Item struct {
 	// Result is the outcome. TestID and Feature are left empty: matching
 	// results to tests is not the parser's job.
 	Result core.Result
+	// Detail is the longer text a tool attached to a failure beyond its short
+	// message (a stack trace, for example). Result.Message is the short part
+	// and is what a table shows; Detail is kept for the run's diagnostic.
+	// Empty when the tool gave nothing beyond the message.
+	Detail string
 	// Synthetic is true for a result the parser made up about a broken stream
 	// (a plan that does not match, a bail-out), as opposed to one the test tool
 	// printed. It says the stream is wrong, not why: the cause is usually the

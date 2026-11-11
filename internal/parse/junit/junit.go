@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -122,32 +123,45 @@ func toItem(s suite, c testCase) parse.Item {
 	}
 
 	res := core.Result{Name: name, Status: core.StatusPass, Duration: duration(c.Time)}
+	var extra string
 	switch {
 	case c.Error != nil: // a test that could not complete outranks a failed check
-		res.Status, res.Message = core.StatusError, describe(c.Error)
+		res.Status = core.StatusError
+		res.Message, extra = describe(c.Error)
 	case c.Failure != nil:
-		res.Status, res.Message = core.StatusFail, describe(c.Failure)
+		res.Status = core.StatusFail
+		res.Message, extra = describe(c.Failure)
 	case c.Skipped != nil:
-		res.Status, res.Message = core.StatusSkip, describe(c.Skipped)
+		res.Status = core.StatusSkip
+		res.Message, _ = describe(c.Skipped) // a skipped test has no failure to explain
 	}
-	return parse.Item{Group: group, Result: res}
+	return parse.Item{Group: group, Result: res, Detail: extra}
 }
 
-// describe joins a problem's message attribute and its text, without repeating
-// the message when the text already starts with it.
-func describe(d *detail) string {
+// describe splits a problem into its short message and any longer detail. The
+// message is the message attribute (or the element's text when there is no
+// attribute). The detail is whatever the text adds beyond the message, such as
+// a stack trace: the message is taken out of the text wherever the tool quoted
+// it ("AssertionError: <message>"), so only the rest is kept. It is empty when
+// the text only repeats the message.
+func describe(d *detail) (message, extra string) {
 	msg, text := strings.TrimSpace(d.Message), strings.TrimSpace(d.Text)
-	switch {
-	case msg == "":
-		return parse.CapMessage(text)
-	case text == "" || strings.HasPrefix(text, msg):
-		if text == "" {
-			return parse.CapMessage(msg)
-		}
-		return parse.CapMessage(text)
-	default:
-		return parse.CapMessage(msg + "\n" + text)
+	if msg == "" {
+		return parse.CapMessage(text), ""
 	}
+	rest := strings.TrimSpace(quotedMessage(msg).ReplaceAllString(text, ""))
+	return parse.CapMessage(msg), parse.CapMessage(rest)
+}
+
+// quotedMessage matches the message wherever a tool quotes it, whatever it did
+// to the spacing: a multi-line message comes back with its continuation lines
+// indented, so each run of whitespace in the message matches any run.
+func quotedMessage(msg string) *regexp.Regexp {
+	words := strings.Fields(msg)
+	for i, w := range words {
+		words[i] = regexp.QuoteMeta(w)
+	}
+	return regexp.MustCompile(strings.Join(words, `\s+`))
 }
 
 // duration converts a "time" attribute in seconds. Anything missing, invalid,

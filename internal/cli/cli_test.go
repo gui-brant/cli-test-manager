@@ -478,7 +478,7 @@ func TestHistoryListAndDetail(t *testing.T) {
 func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	p.runner.reply = func(int, core.Invocation) (core.Output, error) {
-		return core.Output{Stderr: []byte("kaboom\n"), ExitCode: 2}, nil
+		return core.Output{Stderr: []byte("while loading the schema\nkaboom\n"), ExitCode: 2}, nil
 	}
 	if code := p.do("run", "--env", "local", "--test", "users-table"); code != ExitFailed {
 		t.Fatalf("exit %d", code)
@@ -486,7 +486,18 @@ func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 	contains(t, "summary", p.stdout(), "Run 1: FAILED (1 of 1 results failed)", "ERROR #1 users-table Users table checks: exited with code 2: kaboom")
 
 	p.do("history", "1")
-	contains(t, "detail", p.stdout(), "exit code 2", "Diagnostic:", "[users-table] exited with code 2: kaboom")
+	contains(t, "detail", p.stdout(), "exit code 2", "Diagnostic:", "[users-table] exited with code 2: kaboom", "while loading the schema")
+
+	// A command whose whole output is the one line on the error row has no
+	// Diagnostic section: it would only repeat the row.
+	p.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		return core.Output{Stderr: []byte("kaboom\n"), ExitCode: 2}, nil
+	}
+	p.do("run", "--env", "local", "--test", "users-table")
+	p.do("history", "2")
+	if strings.Contains(p.stdout(), "Diagnostic:") {
+		t.Errorf("a diagnostic that only repeats the row was shown:\n%s", p.stdout())
+	}
 
 	// The list does not pick one failure's cause: it counts, and points at the details.
 	p.do("history")

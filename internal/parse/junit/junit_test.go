@@ -63,8 +63,13 @@ func TestParseSingleSuite(t *testing.T) {
 			t.Errorf("item %d group = %q; want %q", i, it.Group, wantGroup[i])
 		}
 	}
-	if got, want := items[1].Result.Message, "expected 401, got 200\nresponse body was empty"; got != want {
+	// The short message is what a table shows. What the tool added beyond it is
+	// kept apart, as the detail, for the run's diagnostic.
+	if got, want := items[1].Result.Message, "expected 401, got 200"; got != want {
 		t.Errorf("failure message = %q; want %q", got, want)
+	}
+	if got, want := items[1].Detail, "response body was empty"; got != want {
+		t.Errorf("failure detail = %q; want %q", got, want)
 	}
 	if got := items[2].Result.Message; got != "no network" {
 		t.Errorf("skip message = %q; want %q", got, "no network")
@@ -117,6 +122,47 @@ func TestParseCasesDirectlyUnderTestsuites(t *testing.T) {
 	mixed := mustParse(t, `<testsuites><testcase name="loose"/><testsuite name="s"><testcase name="wrapped"/></testsuite></testsuites>`)
 	if got := names(mixed); len(got) != 2 {
 		t.Errorf("mixed shapes gave %v; want both cases", got)
+	}
+}
+
+// A failure's text can repeat the message, continue it (a stack trace), say
+// something else, or be missing. The message stays short in every case, and
+// the detail holds only what the text adds.
+func TestParseSplitsMessageFromDetail(t *testing.T) {
+	cases := []struct {
+		name, xml, wantMessage, wantDetail string
+	}{
+		{"only a message", `<failure message="boom"/>`, "boom", ""},
+		{"text repeats the message", `<failure message="boom">boom</failure>`, "boom", ""},
+		{"text continues the message", "<failure message=\"boom\">boom\n  at a.go:1\n  at b.go:2</failure>", "boom", "at a.go:1\n  at b.go:2"},
+		{"text says something else", `<failure message="boom">the server was down</failure>`, "boom", "the server was down"},
+		// Java and Node quote the message inside the text ("AssertionError: boom"):
+		// the quote is removed, the stack stays.
+		{"text quotes the message", "<failure message=\"boom\">java.lang.AssertionError: boom\n\tat Foo.java:10</failure>", "boom", "java.lang.AssertionError: \n\tat Foo.java:10"},
+		// A multi-line message comes back with its continuation lines indented.
+		{"text quotes a multi-line message indented", "<failure message=\"line one&#10;line two\">E: line one\n  line two\n  at x.js:1</failure>", "line one\nline two", "E: \n  at x.js:1"},
+		{"text quotes the message twice", `<failure message="boom">E(boom) cause(boom)</failure>`, "boom", "E() cause()"},
+		{"only text", `<failure>the server was down</failure>`, "the server was down", ""},
+		{"an error element", `<error message="crash">stack here</error>`, "crash", "stack here"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			items := mustParse(t, `<testsuite name="s"><testcase name="t">`+c.xml+`</testcase></testsuite>`)
+			if got := items[0].Result.Message; got != c.wantMessage {
+				t.Errorf("message = %q; want %q", got, c.wantMessage)
+			}
+			if got := items[0].Detail; got != c.wantDetail {
+				t.Errorf("detail = %q; want %q", got, c.wantDetail)
+			}
+		})
+	}
+
+	// A passing or skipped test has no detail to keep.
+	items := mustParse(t, `<testsuite name="s"><testcase name="ok"/><testcase name="sk"><skipped message="later">because</skipped></testcase></testsuite>`)
+	for _, it := range items {
+		if it.Detail != "" {
+			t.Errorf("%s: detail %q; want none", it.Result.Name, it.Detail)
+		}
 	}
 }
 

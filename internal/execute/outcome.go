@@ -29,7 +29,11 @@ type failure struct {
 // timeout, a command that cannot start, unreadable results, no results) is
 // pinned to the test as an extra error result and returned as a failure. The
 // error return is only for a cancelled run.
-func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestSpec) ([]core.Result, *failure, error) {
+//
+// The second extra return is the test's failure details: for each failed result
+// the tool gave more than a short message for, a block headed with the test and
+// the result's name. They are for the run's diagnostic, not for a table.
+func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestSpec) ([]core.Result, *failure, []string, error) {
 	rs := req.Manifest.Runners[t.Runner]
 	inv := core.Invocation{
 		Args:        expand(rs.Run, t.File),
@@ -42,10 +46,11 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	out, err := s.Runner.Run(ctx, inv)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+			return nil, nil, nil, ctx.Err()
 		}
 		cause := "could not start the command: " + p.redactor.Redact(err.Error())
-		return []core.Result{errorResult(t, cause)}, &failure{exitCode: -1, cause: cause, output: cause}, nil
+		// The cause is the whole story, so no output is kept beside it.
+		return []core.Result{errorResult(t, cause)}, &failure{exitCode: -1, cause: cause}, nil, nil
 	}
 
 	// Scrub first, then parse, so names and messages are already clean.
@@ -68,6 +73,7 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	results := make([]core.Result, 0, len(items)+1)
 	own := make([]core.Result, 0, len(items)+1) // without the parser's findings
 	reported := 0                               // failures the test tool itself reported
+	var details []string
 	for _, it := range items {
 		r := it.Result
 		r.TestID, r.Feature = t.ID, t.Feature // the feature is recorded as it is now
@@ -77,6 +83,9 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 		}
 		if r.Status.Failed() && !it.Synthetic {
 			reported++
+			if it.Detail != "" {
+				details = append(details, fmt.Sprintf("[%s] %s\n%s", t.ID, r.Name, it.Detail))
+			}
 		}
 	}
 
@@ -97,7 +106,7 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 		cause = "no results"
 	}
 	if cause == "" {
-		return results, nil, nil
+		return results, nil, details, nil
 	}
 
 	tail := outputTail(stdout, stderr)
@@ -113,7 +122,7 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	// that the stream is wrong ("planned 1 tests but saw 0"), which only says
 	// that something broke, not why.
 	results = append(own, errorResult(t, cause))
-	return results, &failure{exitCode: code, cause: cause, output: diagnosticBody(tail, last, rs.Format)}, nil
+	return results, &failure{exitCode: code, cause: cause, output: diagnosticBody(tail, last, rs.Format)}, details, nil
 }
 
 // diagnosticBody is the part of a failed command's output worth showing under

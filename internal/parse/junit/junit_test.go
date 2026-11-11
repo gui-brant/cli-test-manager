@@ -88,6 +88,38 @@ func TestParseSeveralAndNestedSuites(t *testing.T) {
 	}
 }
 
+// Node's test runner writes its cases directly under <testsuites>, with no
+// <testsuite> around them. They must be read, not silently dropped.
+func TestParseCasesDirectlyUnderTestsuites(t *testing.T) {
+	items := mustParse(t, `<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="passes" time="0.01" classname="test" file="a.test.mjs"/>
+	<testcase name="fails" time="0.02" classname="test" file="a.test.mjs" failure="boom">
+		<failure type="testCodeFailure" message="expected 200, got 500"/>
+	</testcase>
+	<testcase name="skipped"><skipped/></testcase>
+	<!-- tests 3 -->
+</testsuites>`)
+	if got, want := names(items), []string{"passes", "fails", "skipped"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("names = %v; want %v", got, want)
+	}
+	wantStatus := []core.Status{core.StatusPass, core.StatusFail, core.StatusSkip}
+	for i, it := range items {
+		if it.Result.Status != wantStatus[i] {
+			t.Errorf("item %d status = %q; want %q", i, it.Result.Status, wantStatus[i])
+		}
+	}
+	if got := items[1].Result.Message; got != "expected 200, got 500" {
+		t.Errorf("failure message = %q", got)
+	}
+
+	// Cases directly under <testsuites> and inside a <testsuite> are both read.
+	mixed := mustParse(t, `<testsuites><testcase name="loose"/><testsuite name="s"><testcase name="wrapped"/></testsuite></testsuites>`)
+	if got := names(mixed); len(got) != 2 {
+		t.Errorf("mixed shapes gave %v; want both cases", got)
+	}
+}
+
 func TestParseErrorOutranksFailure(t *testing.T) {
 	items := mustParse(t, `<testsuite name="s"><testcase name="t"><failure message="f"/><error message="e"/></testcase></testsuite>`)
 	if got := items[0].Result; got.Status != core.StatusError || got.Message != "e" {

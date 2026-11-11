@@ -22,6 +22,9 @@ import (
 
 type suitesRoot struct {
 	Suites []suite `xml:"testsuite"`
+	// Some tools (Node's test runner is one) put test cases directly under
+	// <testsuites>, with no <testsuite> around them.
+	Cases []testCase `xml:"testcase"`
 }
 
 type suite struct {
@@ -62,6 +65,9 @@ func Parse(r io.Reader) ([]parse.Item, error) {
 			return nil, fmt.Errorf("junit: %w", err)
 		}
 		roots = s.Suites
+		if len(s.Cases) > 0 {
+			roots = append(roots, suite{Cases: s.Cases}) // a suite with no name of its own
+		}
 	case "testsuite":
 		var s suite
 		if err := dec.DecodeElement(&s, &start); err != nil {

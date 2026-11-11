@@ -122,7 +122,10 @@ Commands:
              --env NAME  --test ID (repeatable)  --feature NAME  --yes
   history  list runs, or show one run in full
              history [--env NAME] [--feature NAME] [--source local|remote] [--limit N] [--offset N]
-             history <run number>
+             history <run number> [--detail]
+               --detail  also show the test tool's own detail on the failed results
+                         (stack traces, error objects). It is long and mostly useful
+                         to whoever writes the tests, so it is hidden unless you ask.
   tests    list the tests, or show one test's file
              tests [--feature NAME]
              tests show <id>
@@ -130,6 +133,20 @@ Commands:
              --env NAME  --feature NAME  --since DATE
   check    check the manifest, and that every test file exists
   help     show this text
+
+What "history <run number>" shows, in order:
+  Results       every result; a failed one has its short message under it
+  Diagnostic    what the commands themselves printed when one crashed, timed out
+                or exited with an error (only when there is something to show)
+  Tool detail   only with --detail: the test tool's own stack traces and error
+                objects for the failed results
+
+What "history <run number>" shows, in order:
+  Results       every result; a failed one has its short message under it
+  Diagnostic    what the commands themselves printed when one crashed, timed out
+                or exited with an error (only when there is something to show)
+  Tool detail   only with --detail: the test tool's own stack traces and error
+                objects for the failed results
 
 The manifest, test-manifest.yaml, is looked for in the current folder and
 the folders above it, unless --manifest names it.

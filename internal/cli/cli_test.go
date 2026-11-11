@@ -504,6 +504,57 @@ func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 	contains(t, "list", p.stdout(), "1 of 1 results failed; details: tester history 1")
 }
 
+// The test tool's own detail (stack traces, error objects) is long, so a run's
+// view only says that it exists and how to see it; --detail shows it, before or
+// after the run number.
+func TestHistoryDetailIsHiddenUntilAskedFor(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		report := "<testsuite name=\"s\"><testcase name=\"rejects it\"><failure message=\"expected 401\">expected 401\n  at login.js:10</failure></testcase></testsuite>"
+		return core.Output{Report: []byte(report)}, nil
+	}
+	p.do("run", "--env", "local", "--test", "login-flow")
+
+	p.do("history", "1")
+	contains(t, "default view", p.stdout(), "expected 401", "Show it with: tester history 1 --detail")
+	if strings.Contains(p.stdout(), "login.js:10") || strings.Contains(p.stdout(), "Tool detail:") {
+		t.Errorf("the tool's detail was shown without asking:\n%s", p.stdout())
+	}
+
+	for _, args := range [][]string{{"history", "1", "--detail"}, {"history", "--detail", "1"}} {
+		if code := p.do(args...); code != ExitOK {
+			t.Fatalf("%v: exit %d; %s", args, code, p.stderr())
+		}
+		contains(t, strings.Join(args, " "), p.stdout(), "Tool detail:", "[login-flow] rejects it", "at login.js:10")
+		if strings.Contains(p.stdout(), "Show it with") {
+			t.Errorf("%v: the hint was shown although the detail was asked for", args)
+		}
+	}
+
+	if code := p.do("history", "--detail"); code != ExitError {
+		t.Errorf("--detail without a run number: exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), "--detail shows one run in full")
+	if code := p.do("history", "1", "2"); code != ExitError {
+		t.Errorf("two run numbers: exit %d; want %d", code, ExitError)
+	}
+}
+
+// Both kinds of help say what --detail is for, in plain words.
+func TestHelpExplainsWhatDetailIsFor(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.do("help")
+	contains(t, "help", p.stdout(),
+		"history <run number> [--detail]",
+		"--detail also show the test tool's own detail on the failed results",
+		"stack traces, error objects",
+		"hidden unless you ask",
+		"Tool detail only with --detail")
+
+	p.do("history", "-h")
+	contains(t, "history -h", p.stderr(), "-detail", "stack traces, error objects", "hidden unless asked for")
+}
+
 func TestNoHistoryYet(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	for _, cmd := range [][]string{{"history"}, {"counts"}} {

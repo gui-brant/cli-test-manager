@@ -29,11 +29,7 @@ type failure struct {
 // timeout, a command that cannot start, unreadable results, no results) is
 // pinned to the test as an extra error result and returned as a failure. The
 // error return is only for a cancelled run.
-//
-// The second extra return is the test's failure details: for each failed result
-// the tool gave more than a short message for, a block headed with the test and
-// the result's name. They are for the run's diagnostic, not for a table.
-func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestSpec) ([]core.Result, *failure, []string, error) {
+func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestSpec) (testRun, error) {
 	rs := req.Manifest.Runners[t.Runner]
 	inv := core.Invocation{
 		Args:        expand(rs.Run, t.File),
@@ -46,11 +42,11 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	out, err := s.Runner.Run(ctx, inv)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, nil, ctx.Err()
+			return testRun{}, ctx.Err()
 		}
 		cause := "could not start the command: " + p.redactor.Redact(err.Error())
 		// The cause is the whole story, so no output is kept beside it.
-		return []core.Result{errorResult(t, cause)}, &failure{exitCode: -1, cause: cause}, nil, nil
+		return testRun{results: []core.Result{errorResult(t, cause)}, fail: &failure{exitCode: -1, cause: cause}}, nil
 	}
 
 	// Scrub first, then parse, so names and messages are already clean.
@@ -106,7 +102,14 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 		cause = "no results"
 	}
 	if cause == "" {
-		return results, nil, details, nil
+		tr := testRun{results: results, details: details}
+		// The failing results explain a non-zero exit, but not what the command
+		// printed on its error stream (a missing setting, a warning), which is
+		// often the thing to act on. That stays in the diagnostic.
+		if e := strings.TrimSpace(stderr); out.ExitCode != 0 && e != "" {
+			tr.evidence = fmt.Sprintf("[%s] exited with code %d\n%s", t.ID, out.ExitCode, core.TailDiagnostic(e))
+		}
+		return tr, nil
 	}
 
 	tail := outputTail(stdout, stderr)
@@ -122,7 +125,28 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	// that the stream is wrong ("planned 1 tests but saw 0"), which only says
 	// that something broke, not why.
 	results = append(own, errorResult(t, cause))
-	return results, &failure{exitCode: code, cause: cause, output: diagnosticBody(tail, last, rs.Format)}, details, nil
+	return testRun{
+		results: results,
+		fail:    &failure{exitCode: code, cause: cause, output: diagnosticBody(tail, last, rs.Format)},
+		details: details,
+	}, nil
+}
+
+// testRun is what one test's command produced.
+type testRun struct {
+	// results are the test's results, with the error result added when its
+	// failure was not explained by them.
+	results []core.Result
+	// fail is set when the results did not explain a failure.
+	fail *failure
+	// evidence is a block for the run's diagnostic about the command itself,
+	// when a failing result explains the exit code but the command also wrote
+	// to its error stream. Empty otherwise.
+	evidence string
+	// details are the test tool's own detail for failed results (stack traces,
+	// error objects): one block per result, headed with the test and the
+	// result's name. They go to the run's Detail, not to a table or the diagnostic.
+	details []string
 }
 
 // diagnosticBody is the part of a failed command's output worth showing under

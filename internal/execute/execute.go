@@ -125,7 +125,7 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 	}
 
 	run := core.Run{Source: core.SourceLocal, Environment: req.Environment, State: core.RunComplete, StartedAt: s.now()}
-	var diagnostics []string
+	var diagnostics, details []string
 	total := len(p.tests)
 
 	cancelled := func(done int, cause error) (Report, error) {
@@ -140,10 +140,11 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 		}
 		emit(Event{Kind: EventStarted, Test: t, Index: i + 1, Total: total})
 
-		results, fail, details, err := s.runOne(ctx, req, p, t)
+		tr, err := s.runOne(ctx, req, p, t)
 		if err != nil {
 			return cancelled(i, err)
 		}
+		results, fail := tr.results, tr.fail
 		run.Results = append(run.Results, results...)
 
 		done := Event{Kind: EventFinished, Test: t, Index: i + 1, Total: total}
@@ -163,16 +164,23 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 		} else if n := failedCount(results); n > 0 {
 			done.Failed, done.Reason = true, fmt.Sprintf("%d of %d results failed", n, len(results))
 		}
+		// The command's own error output, when failing results explain the exit
+		// code but the command also said something on its error stream.
+		if tr.evidence != "" {
+			diagnostics = append(diagnostics, tr.evidence)
+		}
 		// What the test tool said beyond each failure's short message (a stack
-		// trace, say) belongs in the diagnostic, not on the result's row.
-		diagnostics = append(diagnostics, details...)
+		// trace, say) is kept apart: it is long, so a view shows it on request.
+		details = append(details, tr.details...)
 		emit(done)
 	}
 
 	run.FinishedAt = s.now()
-	// One block for each thing that has more to say than its row does, with a
-	// blank line between blocks. A run where nothing does has no diagnostic.
+	// The diagnostic is about the commands: one block for each command that has
+	// more to say than its row does, with a blank line between blocks. A run
+	// where none does has no diagnostic.
 	run.Diagnostic = core.TailDiagnostic(strings.TrimRight(strings.Join(diagnostics, "\n\n"), "\n"))
+	run.Detail = core.TailDiagnostic(strings.TrimRight(strings.Join(details, "\n\n"), "\n"))
 
 	id, err := s.Store.SaveRun(ctx, run)
 	if err != nil {

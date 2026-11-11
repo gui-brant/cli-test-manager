@@ -617,8 +617,40 @@ func TestAToolsLongDetailGoesToTheDiagnosticNotTheRow(t *testing.T) {
 	if len(run.Results) != 1 || run.Results[0].Message != "expected 401" {
 		t.Fatalf("results %+v; want one failed result with only the short message", run.Results)
 	}
-	if want := "[login-flow] rejects it\nat login.js:10"; run.Diagnostic != want {
+	// The tool's detail is about the tool, not the command, so it is kept apart
+	// from the diagnostic and a view shows it only when asked.
+	if run.Diagnostic != "" {
+		t.Errorf("diagnostic %q; want none", run.Diagnostic)
+	}
+	if want := "[login-flow] rejects it\nat login.js:10"; run.Detail != want {
+		t.Errorf("detail %q; want %q", run.Detail, want)
+	}
+}
+
+// A failing result explains a non-zero exit, but not what the command printed on
+// its error stream (a missing setting, say). That stays in the diagnostic, and
+// the run still has no extra error row and no exit code of its own.
+func TestErrorOutputIsKeptWhenFailingResultsExplainTheExit(t *testing.T) {
+	f := newFixture(t)
+	f.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		return core.Output{Stdout: []byte("1..1\nnot ok 1 - a\n"), Stderr: []byte("BASE_URL is not set\n"), ExitCode: 2}, nil
+	}
+	run := f.mustRun("local", Selection{TestIDs: []string{"users-table"}}).Run
+
+	if len(run.Results) != 1 || run.Results[0].Status != core.StatusFail || run.ExitCode != 0 {
+		t.Fatalf("results %+v, exit code %d; want only the failing result, explained", run.Results, run.ExitCode)
+	}
+	if want := "[users-table] exited with code 2\nBASE_URL is not set"; run.Diagnostic != want {
 		t.Errorf("diagnostic %q; want %q", run.Diagnostic, want)
+	}
+
+	// Error output from a command that exited 0 is not evidence of a failure.
+	f = newFixture(t)
+	f.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		return core.Output{Stdout: []byte("1..1\nnot ok 1 - a\n"), Stderr: []byte("a warning\n")}, nil
+	}
+	if run := f.mustRun("local", Selection{TestIDs: []string{"users-table"}}).Run; run.Diagnostic != "" {
+		t.Errorf("diagnostic %q for an exit of 0; want none", run.Diagnostic)
 	}
 }
 

@@ -20,8 +20,21 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	source := fs.String("source", "", "only runs from this source: local or remote")
 	limit := fs.Int("limit", 0, "show at most this many runs")
 	offset := fs.Int("offset", 0, "skip this many runs")
-	if code, stop := a.parseFlags(fs, args, 1); stop {
+	detail := fs.Bool("detail", false, "with a run number: also show the test tool's own detail on the failed results "+
+		"(stack traces, error objects). It is long and mostly useful to whoever writes the tests, so it is hidden unless asked for")
+	if code, stop := a.parseFlags(fs, args, 100); stop {
 		return code
+	}
+	rest := fs.Args()
+	if len(rest) > 1 {
+		// Flags may also follow the run number: "history 7 --detail".
+		if code, stop := a.parseFlags(fs, rest[1:], 0); stop {
+			return code
+		}
+		rest = rest[:1]
+	}
+	if *detail && len(rest) == 0 {
+		return a.errorf("--detail shows one run in full: tester history <run number> --detail")
 	}
 
 	loaded, err := a.load(manifestPath)
@@ -36,8 +49,8 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 		defer store.Close()
 	}
 
-	if fs.NArg() == 1 {
-		return a.showRun(ctx, loaded, store, fs.Arg(0))
+	if len(rest) == 1 {
+		return a.showRun(ctx, loaded, store, rest[0], *detail)
 	}
 	if store == nil {
 		fmt.Fprintln(a.Stdout, "No runs yet.")
@@ -83,7 +96,7 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	return ExitOK
 }
 
-func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *sqlite.Store, arg string) int {
+func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *sqlite.Store, arg string, detail bool) int {
 	id, err := strconv.ParseInt(arg, 10, 64)
 	if err != nil || id <= 0 {
 		return a.errorf("%q is not a run number", arg)
@@ -134,6 +147,15 @@ func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *s
 	if strings.TrimSpace(run.Diagnostic) != "" {
 		fmt.Fprintln(a.Stdout, "\nDiagnostic:")
 		fmt.Fprintln(a.Stdout, indent(run.Diagnostic, "  "))
+	}
+	if strings.TrimSpace(run.Detail) != "" {
+		if detail {
+			fmt.Fprintln(a.Stdout, "\nTool detail:")
+			fmt.Fprintln(a.Stdout, indent(run.Detail, "  "))
+		} else {
+			// Say that it exists and how to see it, so nobody has to guess.
+			fmt.Fprintf(a.Stdout, "\nThe test tool gave more detail on the failed results (stack traces, error objects).\nShow it with: tester history %d --detail\n", id)
+		}
 	}
 	return ExitOK
 }

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	bkey "github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
@@ -99,20 +97,8 @@ func (s *historyScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 
 func (s *historyScreen) view(width, height int) string {
 	question := fmt.Sprintf("Runs of %s in %s, newest first", s.sel.feature, s.sel.env)
-	if len(s.runs) == 0 {
-		var b strings.Builder
-		b.WriteString(clip(s.sel.breadcrumb(), width))
-		b.WriteString("\n")
-		b.WriteString(clip(question, width))
-		b.WriteString("\n\n")
-		if s.status == "" {
-			b.WriteString(wrap(fmt.Sprintf("No runs of %s in %s yet.", s.sel.feature, s.sel.env), width))
-		} else {
-			b.WriteString(wrap(s.status, width))
-		}
-		return b.String()
-	}
-	return layout(width, height, s.sel.breadcrumb(), question, s.pick, s.status)
+	return layoutList(width, height, s.sel.breadcrumb(), question, s.pick, s.status,
+		fmt.Sprintf("No runs of %s in %s yet.", s.sel.feature, s.sel.env))
 }
 
 func (s *historyScreen) keys() string {
@@ -132,7 +118,7 @@ type runScreen struct {
 	id         int64
 	parts      view.Run
 	showDetail bool
-	vp         viewport.Model
+	scroll     scroller
 }
 
 func newRunScreen(sel selection, id int64) (*runScreen, error) {
@@ -154,13 +140,7 @@ func newRunScreen(sel selection, id int64) (*runScreen, error) {
 	if err != nil {
 		return nil, err
 	}
-	vp := viewport.New(80, 20)
-	// The viewport pages with d and u; here d is the detail key.
-	vp.KeyMap.HalfPageDown = bkey.NewBinding(bkey.WithKeys("ctrl+d"))
-	vp.KeyMap.HalfPageUp = bkey.NewBinding(bkey.WithKeys("ctrl+u"))
-	vp.KeyMap.Left = bkey.NewBinding()
-	vp.KeyMap.Right = bkey.NewBinding()
-	return &runScreen{sel: sel, id: id, parts: parts, vp: vp}, nil
+	return &runScreen{sel: sel, id: id, parts: parts, scroll: newScroller()}, nil
 }
 
 // text is everything the screen shows, in the order of the command.
@@ -189,19 +169,14 @@ func (s *runScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 		}
 		return s, nav{}, nil
 	}
-	var cmd tea.Cmd
-	s.vp, cmd = s.vp.Update(msg)
-	return s, nav{}, cmd
+	return s, nav{}, s.scroll.update(msg)
 }
 
 func (s *runScreen) view(width, height int) string {
 	var b strings.Builder
 	b.WriteString(clip(fmt.Sprintf("%s › run %d", s.sel.breadcrumb(), s.id), width))
 	b.WriteString("\n\n")
-	s.vp.Width = width
-	s.vp.Height = max(height-2, 1)
-	s.vp.SetContent(wrap(s.text(), width))
-	b.WriteString(s.vp.View())
+	b.WriteString(s.scroll.render(s.text(), width, height-2))
 	return b.String()
 }
 

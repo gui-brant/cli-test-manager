@@ -167,9 +167,7 @@ func TestEscStepsBackOneScreenAtATimeKeepingTheCursor(t *testing.T) {
 func TestActionsAreBuiltLaterAndSayWhenChosen(t *testing.T) {
 	m := menuFor(t, oneEnvironment)
 	press(m, "enter", "enter")
-	press(m, "down", "enter") // Run history is built; Counts is not yet
-	mustContain(t, "status", m.View(), "Counts is built in a later step of the menu")
-	press(m, "down", "down", "enter")
+	press(m, "down", "down", "down", "enter") // history, counts and tests are built; Run all is not yet
 	mustContain(t, "status", m.View(), "Run all is built in a later step of the menu", "> Run all")
 	press(m, "down")
 	if strings.Contains(m.View(), "is built in a later step") {

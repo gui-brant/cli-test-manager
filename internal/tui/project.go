@@ -157,6 +157,19 @@ func layout(width, height int, crumb, question string, p *picker, status string)
 	return b.String()
 }
 
+// layoutList is layout for a list that may have nothing in it: with no rows it
+// shows the reason the list could not be read, or else the empty text.
+func layoutList(width, height int, crumb, question string, p *picker, status, empty string) string {
+	if len(p.items) > 0 {
+		return layout(width, height, crumb, question, p, status)
+	}
+	text := empty
+	if status != "" {
+		text = status
+	}
+	return clip(crumb, width) + "\n" + clip(question, width) + "\n\n" + wrap(text, width)
+}
+
 // commonKeys handles the keys every choice screen shares. handled is false for
 // any other key, which the caller then passes to the list.
 func commonKeys(msg tea.Msg) (n nav, handled bool) {
@@ -288,8 +301,7 @@ func newActionScreen(sel selection) *actionScreen {
 	items := []pickItem{
 		{"Run history", fmt.Sprintf("the runs of %s in %s, newest first", sel.feature, sel.env)},
 		{"Counts", "how each test has done"},
-		{"Tests", fmt.Sprintf("the %s of %s, and their code", noun(total, "test", "tests"), sel.feature)},
-		{"Run all", fmt.Sprintf("%s in %s, asks first", noun(inEnv, "test", "tests"), sel.env)},
+		{"Tests", fmt.Sprintf("the %s of %s, and their code", noun(total, "test", "tests"), sel.feature)}, {"Run all", fmt.Sprintf("%s in %s, asks first", noun(inEnv, "test", "tests"), sel.env)},
 		{"Run several", "choose which of them to run"},
 	}
 	return &actionScreen{sel: sel, pick: newPicker(items)}
@@ -306,6 +318,10 @@ func (s *actionScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 			case i < 0:
 			case s.pick.items[i].label == "Run history":
 				return s, nav{push: newHistoryScreen(s.sel)}, nil
+			case s.pick.items[i].label == "Counts":
+				return s, nav{push: newCountsScreen(s.sel)}, nil
+			case s.pick.items[i].label == "Tests":
+				return s, nav{push: newTestsScreen(s.sel)}, nil
 			default:
 				s.status = s.pick.items[i].label + " is built in a later step of the menu."
 			}

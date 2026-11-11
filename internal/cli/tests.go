@@ -2,14 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/gui-brant/cli-test-manager/internal/query"
 )
-
-// maxShownBytes caps how much of a test file `tests show` prints.
-const maxShownBytes = 1 << 20
 
 func (a *app) cmdTests(manifestPath string, args []string) int {
 	if len(args) > 0 && args[0] == "show" {
@@ -56,8 +51,7 @@ func (a *app) showTest(manifestPath string, args []string) int {
 		return a.errorf("test %q is not in the manifest", args[0])
 	}
 
-	path := filepath.Join(loaded.Root, filepath.FromSlash(row.File))
-	data, err := os.ReadFile(path)
+	code, err := query.TestCode(loaded.Root, row)
 	if err != nil {
 		return a.errorf("cannot read the test file %s: %v", row.File, err)
 	}
@@ -65,11 +59,9 @@ func (a *app) showTest(manifestPath string, args []string) int {
 	fmt.Fprintf(a.Stdout, "#%d  %s  %s\n", row.Number, row.ID, row.Name)
 	fmt.Fprintf(a.Stdout, "feature: %s   runner: %s   tag: %s\n", row.Feature, row.Runner, dash(row.Tag))
 	fmt.Fprintf(a.Stdout, "file: %s\n\n", row.File)
-	if len(data) > maxShownBytes {
-		a.Stdout.Write(data[:maxShownBytes])
-		fmt.Fprintf(a.Stdout, "\n[... %d more bytes not shown ...]\n", len(data)-maxShownBytes)
-		return ExitOK
+	fmt.Fprint(a.Stdout, code.Text)
+	if code.Omitted > 0 {
+		fmt.Fprintf(a.Stdout, "\n[... %d more bytes not shown ...]\n", code.Omitted)
 	}
-	a.Stdout.Write(data)
 	return ExitOK
 }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -54,7 +53,7 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	if err != nil {
 		return a.errorf("%v", err)
 	}
-	a.remember(loaded) // the request is sound, so this project is being used
+	a.remember(loaded, *yes) // the request is sound, so this project is being used; --yes asks nothing
 
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked.
@@ -88,10 +87,10 @@ func confirmationQuestion(p execute.Preview, env string) string {
 // standard error, so piping or redirecting the run's output never hides it.
 func (a *app) confirm(prompt string) bool {
 	fmt.Fprint(a.Stderr, prompt)
-	if a.Stdin == nil {
+	line, ok := a.readLine()
+	if !ok {
 		return false
 	}
-	line, _ := bufio.NewReader(a.Stdin).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true

@@ -7,6 +7,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -59,6 +60,26 @@ type Deps struct {
 type app struct {
 	Deps
 	loc *time.Location
+	// in reads lines from standard input. One reader is shared by every
+	// question, because a second reader would not see what the first has
+	// already taken from the stream.
+	in *bufio.Reader
+}
+
+// readLine reads one line from standard input, without its line ending. ok is
+// false when there is no input or it has ended.
+func (a *app) readLine() (line string, ok bool) {
+	if a.Stdin == nil {
+		return "", false
+	}
+	if a.in == nil {
+		a.in = bufio.NewReader(a.Stdin)
+	}
+	line, err := a.in.ReadString('\n')
+	if err != nil && line == "" {
+		return "", false
+	}
+	return strings.TrimRight(line, "\r\n"), true
 }
 
 // Main runs one command and returns its exit code.
@@ -139,13 +160,15 @@ Commands:
   counts   show how each test has done
              --env NAME  --feature NAME  --since DATE
   check    check the manifest, and that every test file exists
-  projects list, add or forget the projects the program knows about
+  projects list, add, rename or forget the projects the program knows about
              projects list
-             projects add [folder]
+             projects add [--name nickname] [folder]
+             projects rename <name or folder> <nickname>
              projects remove <name or folder>
   help     show this text
 
-A project is added to the list of projects when you use run or history in it.
+A project is added to the list of projects when you use run or history in it; at
+a terminal you are asked for an optional nickname.
 
 The manifest, test-manifest.yaml, is looked for in the current folder and
 the folders above it, unless --manifest names it.

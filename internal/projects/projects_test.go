@@ -85,7 +85,7 @@ func TestAddReadsTheManifestAndStoresAnAbsolutePath(t *testing.T) {
 	dir := project(t, "photo-app")
 	t.Chdir(dir)
 
-	p, added, err := s.Add(".") // a relative path, from inside the project
+	p, added, err := s.Add(".", "", nil) // a relative path, from inside the project
 	if err != nil || !added {
 		t.Fatalf("Add: %v, added %v", err, added)
 	}
@@ -102,7 +102,7 @@ func TestAddNeedsAManifest(t *testing.T) {
 	s := service(t)
 	empty := t.TempDir()
 
-	_, _, err := s.Add(empty)
+	_, _, err := s.Add(empty, "", nil)
 	if err == nil || !strings.Contains(err.Error(), "test-manifest.yaml") {
 		t.Fatalf("Add of a folder with no manifest: %v; want an error naming test-manifest.yaml", err)
 	}
@@ -286,4 +286,176 @@ func TestParallelWritesNeverCorruptTheFile(t *testing.T) {
 	if len(leftovers) != 0 {
 		t.Errorf("temporary files left behind: %v", leftovers)
 	}
+}
+
+// ---- nicknames (entry 50) ----
+
+func TestANicknameIsShownInPlaceOfTheManifestName(t *testing.T) {
+	s := service(t)
+	dir := project(t, "se3316-lab3-birdwatching")
+
+	p, added, err := s.Add(dir, "  birdwatching  ", nil) // spaces around it are trimmed
+	if err != nil || !added || p.Nickname != "birdwatching" || p.Name != "se3316-lab3-birdwatching" {
+		t.Fatalf("Add = %+v, added %v, %v; want the nickname set and the manifest's name kept", p, added, err)
+	}
+	if p.Display() != "birdwatching" {
+		t.Errorf("Display = %q; want the nickname", p.Display())
+	}
+	if text := read(t, s.File); !strings.Contains(text, "nickname: birdwatching") || !strings.Contains(text, "name: se3316-lab3-birdwatching") {
+		t.Errorf("the list file lacks both names:\n%s", text)
+	}
+	plain := Project{Name: "x"}
+	if plain.Display() != "x" {
+		t.Errorf("Display with no nickname = %q; want the manifest's name", plain.Display())
+	}
+}
+
+func TestTheAskerIsCalledOnlyForANewProjectWithNoNickname(t *testing.T) {
+	s := service(t)
+	calls := 0
+	var asked string
+	ask := func(name string) string { calls++; asked = name; return "bw" }
+
+	dir := project(t, "se3316-lab3-birdwatching")
+	p, added, err := s.Add(dir, "", ask)
+	if err != nil || !added || p.Nickname != "bw" || calls != 1 || asked != "se3316-lab3-birdwatching" {
+		t.Fatalf("new project: %+v, added %v, %v, asked %d times about %q; want asked once, nickname bw", p, added, err, calls, asked)
+	}
+
+	// Already listed: never asked again, nickname kept.
+	if _, added, err := s.Add(dir, "", ask); err != nil || added || calls != 1 {
+		t.Errorf("listed project: added %v, %v, asked %d times; want not asked", added, err, calls)
+	}
+	if _, added, err := s.Use(Project{Name: "se3316-lab3-birdwatching", Path: dir}, ask); err != nil || added || calls != 1 {
+		t.Errorf("Use of a listed project: added %v, %v, asked %d times; want not asked", added, err, calls)
+	}
+
+	// A nickname given with the folder means there is nothing to ask.
+	other := project(t, "photo-app")
+	if _, _, err := s.Add(other, "photos", ask); err != nil || calls != 1 {
+		t.Errorf("Add with a nickname asked %d times in all; want still 1 (%v)", calls, err)
+	}
+
+	// An asker that answers nothing keeps the manifest's name.
+	third := project(t, "third")
+	p, _, err = s.Use(Project{Name: "third", Path: third}, func(string) string { return "" })
+	if err != nil || p.Nickname != "" || p.Display() != "third" {
+		t.Errorf("an empty answer: %+v, %v; want no nickname", p, err)
+	}
+}
+
+func TestARefreshedManifestNameNeverOverwritesANickname(t *testing.T) {
+	s := service(t)
+	dir := project(t, "photo-app")
+	s.Add(dir, "photos", nil)
+
+	added, err := s.Remember(Project{Name: "photo-gallery", Path: dir}) // the manifest was renamed
+	if err != nil || added {
+		t.Fatalf("Remember: added %v, %v", added, err)
+	}
+	got, _ := s.List()
+	if len(got) != 1 || got[0].Name != "photo-gallery" || got[0].Nickname != "photos" {
+		t.Errorf("List = %+v; want the manifest's name refreshed and the nickname kept", got)
+	}
+}
+
+func TestAddingAListedProjectWithANicknameSetsIt(t *testing.T) {
+	s := service(t)
+	dir := project(t, "photo-app")
+	s.Add(dir, "photos", nil)
+
+	p, added, err := s.Add(dir, "pics", nil)
+	if err != nil || added || p.Nickname != "pics" {
+		t.Errorf("Add = %+v, added %v, %v; want the nickname changed, not added again", p, added, err)
+	}
+	if got, _ := s.List(); len(got) != 1 {
+		t.Errorf("List = %+v; want one project", got)
+	}
+}
+
+func TestRenameSetsChangesAndClearsTheNickname(t *testing.T) {
+	s := service(t)
+	dir := project(t, "se3316-lab3-birdwatching")
+	s.Remember(Project{Name: "se3316-lab3-birdwatching", Path: dir})
+
+	p, previous, err := s.Rename("se3316-lab3-birdwatching", "birdwatching")
+	if err != nil || p.Nickname != "birdwatching" || previous != "se3316-lab3-birdwatching" {
+		t.Fatalf("Rename = %+v, previous %q, %v", p, previous, err)
+	}
+	p, previous, err = s.Rename("birdwatching", "birds") // found by its nickname
+	if err != nil || p.Nickname != "birds" || previous != "birdwatching" {
+		t.Fatalf("second Rename = %+v, previous %q, %v", p, previous, err)
+	}
+	p, previous, err = s.Rename(dir, "") // found by folder; empty clears
+	if err != nil || p.Nickname != "" || p.Display() != "se3316-lab3-birdwatching" || previous != "birds" {
+		t.Fatalf("clearing Rename = %+v, previous %q, %v", p, previous, err)
+	}
+	if text := read(t, s.File); strings.Contains(text, "nickname:") {
+		t.Errorf("a cleared nickname is still in the file:\n%s", text)
+	}
+	if _, _, err := s.Rename("nope", "x"); !errors.Is(err, core.ErrNotFound) {
+		t.Errorf("Rename of an unknown key: %v; want core.ErrNotFound", err)
+	}
+}
+
+func TestRemoveFindsAProjectByNicknameOrByManifestName(t *testing.T) {
+	s := service(t)
+	a, b := project(t, "se3316-lab3-birdwatching"), project(t, "photo-app")
+	s.Add(a, "birdwatching", nil)
+	s.Add(b, "photos", nil)
+
+	if p, err := s.Remove("birdwatching"); err != nil || p.Path != a {
+		t.Fatalf("Remove by nickname: %+v, %v", p, err)
+	}
+	if p, err := s.Remove("photo-app"); err != nil || p.Path != b { // the manifest's name still works
+		t.Fatalf("Remove by manifest name: %+v, %v", p, err)
+	}
+}
+
+func TestASharedNicknameAsksForTheFolder(t *testing.T) {
+	s := service(t)
+	a, b := project(t, "one"), project(t, "two")
+	s.Add(a, "app", nil)
+	s.Add(b, "app", nil)
+
+	var amb *AmbiguousError
+	if _, err := s.Remove("app"); !errors.As(err, &amb) || len(amb.Paths) != 2 {
+		t.Fatalf("Remove of a shared nickname: %v; want an *AmbiguousError", err)
+	}
+	if _, _, err := s.Rename("app", "x"); !errors.As(err, &amb) {
+		t.Errorf("Rename of a shared nickname: %v; want an *AmbiguousError", err)
+	}
+	// A nickname that equals another project's manifest name is shared too.
+	c := project(t, "app")
+	s.Remember(Project{Name: "app", Path: c})
+	if _, err := s.Remove("app"); !errors.As(err, &amb) || len(amb.Paths) != 3 {
+		t.Errorf("Remove with a nickname and a manifest name both 'app': %v", err)
+	}
+}
+
+func TestANicknameThatCouldBeAFolderOrIsOddIsRefused(t *testing.T) {
+	for _, bad := range []string{"a/b", `a\b`, ".", "..", "two\nlines", "bell\a"} {
+		t.Run(bad, func(t *testing.T) {
+			s := service(t)
+			dir := project(t, "photo-app")
+			if _, _, err := s.Add(dir, bad, nil); err == nil {
+				t.Error("Add accepted it")
+			}
+			if exists(s.File) {
+				t.Error("a refused nickname created the list file")
+			}
+			s.Remember(Project{Name: "photo-app", Path: dir})
+			if _, _, err := s.Rename("photo-app", bad); err == nil {
+				t.Error("Rename accepted it")
+			}
+		})
+	}
+	if nick, err := CheckNickname("  fine name  "); err != nil || nick != "fine name" {
+		t.Errorf("CheckNickname = %q, %v", nick, err)
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

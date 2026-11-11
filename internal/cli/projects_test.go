@@ -137,6 +137,10 @@ func TestProjectsUsageErrors(t *testing.T) {
 		{"projects", "add", "a", "b"},
 		{"projects", "remove"},
 		{"projects", "remove", "a", "b"},
+		{"projects", "rename"},
+		{"projects", "rename", "a"},
+		{"projects", "rename", "a", "b", "c"},
+		{"projects", "add", "--bogus"},
 	}
 	for _, args := range cases {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -155,7 +159,8 @@ func TestProjectsUsageErrors(t *testing.T) {
 	}
 	p := newProject(t, twoEnvironments)
 	p.do("projects", "help")
-	contains(t, "projects help", p.stdout(), "tester projects list", "tester projects add [folder]", "tester projects remove <name or folder>")
+	contains(t, "projects help", p.stdout(), "tester projects list", "tester projects add [--name nickname] [folder]",
+		"tester projects rename <name or folder> <nickname>", "tester projects remove <name or folder>", `rename with an empty nickname ("") clears it`)
 }
 
 func TestProjectsSaysWhenThereIsNoList(t *testing.T) {
@@ -254,7 +259,235 @@ func TestHelpListsTheProjectsCommand(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	p.do("help")
 	contains(t, "help", p.stdout(),
-		"projects list, add or forget the projects the program knows about",
-		"projects add [folder]", "projects remove <name or folder>",
-		"added to the list of projects when you use run or history in it")
+		"projects list, add, rename or forget the projects the program knows about",
+		"projects add [--name nickname] [folder]", "projects rename <name or folder> <nickname>", "projects remove <name or folder>",
+		"added to the list of projects when you use run or history in it", "you are asked for an optional nickname")
+}
+
+// ---- nicknames (entry 50) ----
+
+const nicknameQuestion = `The project will be listed as "example". Add a nickname?`
+
+// atATerminal makes the project's input a person typing these lines.
+func atATerminal(p *project, typed string) {
+	p.deps.IsTerminal = true
+	p.deps.Stdin = strings.NewReader(typed)
+}
+
+func TestANewProjectOffersANicknameAtATerminal(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	atATerminal(p, "birdwatching\n")
+
+	if code := p.do("history"); code != ExitOK {
+		t.Fatalf("history: exit %d; %s", code, p.stderr())
+	}
+	contains(t, "the question", p.stderr(), nicknameQuestion, "(Enter to keep the name)")
+	contains(t, "history still prints", p.stdout(), "No runs yet.")
+
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "birdwatching (example)", p.root)
+
+	// Already listed: never asked again.
+	atATerminal(p, "other\n")
+	p.do("history")
+	if strings.Contains(p.stderr(), "nickname") {
+		t.Errorf("a listed project was asked again:\n%s", p.stderr())
+	}
+	p.do("projects", "list")
+	contains(t, "list after", p.stdout(), "birdwatching (example)")
+}
+
+func TestPressingEnterOrNoInputKeepsTheManifestName(t *testing.T) {
+	for name, typed := range map[string]string{"Enter": "\n", "end of input": "", "only spaces": "   \n"} {
+		t.Run(name, func(t *testing.T) {
+			p := newProject(t, twoEnvironments)
+			listFor(t, p)
+			atATerminal(p, typed)
+			if code := p.do("history"); code != ExitOK {
+				t.Fatalf("exit %d; %s", code, p.stderr())
+			}
+			p.do("projects", "list")
+			contains(t, "list", p.stdout(), "example", p.root)
+			if strings.Contains(p.stdout(), "(example)") {
+				t.Errorf("a nickname was set:\n%s", p.stdout())
+			}
+		})
+	}
+}
+
+func TestAnUnusableNicknameIsReportedAndTheNameKept(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	atATerminal(p, "a/b\n")
+	if code := p.do("history"); code != ExitOK {
+		t.Fatalf("exit %d", code)
+	}
+	contains(t, "stderr", p.stderr(), "cannot be used", `keeping the name "example"`)
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "example")
+	if strings.Contains(p.stdout(), "a/b") {
+		t.Errorf("the unusable nickname was stored:\n%s", p.stdout())
+	}
+}
+
+func TestNobodyIsAskedWhereNobodyCanAnswerOrWhenToldNotTo(t *testing.T) {
+	// Not a terminal (a push hook): no question, the manifest's name is used.
+	p := newProject(t, twoEnvironments)
+	list := listFor(t, p)
+	p.deps.Stdin = strings.NewReader("birdwatching\n")
+	p.do("history")
+	if strings.Contains(p.stderr(), "nickname") {
+		t.Errorf("asked without a terminal:\n%s", p.stderr())
+	}
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "example")
+	if strings.Contains(p.stdout(), "birdwatching") {
+		t.Errorf("input that nobody was asked for became a nickname:\n%s", p.stdout())
+	}
+
+	// A terminal, but --yes: no question.
+	q := newProject(t, twoEnvironments)
+	q.deps.ProjectsFile = list
+	atATerminal(q, "birdwatching\n")
+	if code := q.do("run", "--env", "local", "--yes"); code != ExitOK {
+		t.Fatalf("run --yes: exit %d; %s", code, q.stderr())
+	}
+	if strings.Contains(q.stderr(), "nickname") {
+		t.Errorf("run --yes asked:\n%s", q.stderr())
+	}
+}
+
+// The nickname question and "Are you sure?" read from the same input, in that order.
+func TestTheNicknameQuestionAndTheConfirmationShareTheInput(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	atATerminal(p, "bw\ny\n")
+
+	if code := p.do("run", "--env", "local"); code != ExitOK {
+		t.Fatalf("run: exit %d; %s %s", code, p.stdout(), p.stderr())
+	}
+	question := strings.Index(p.stderr(), "Add a nickname?")
+	sure := strings.Index(p.stderr(), "[y/N]")
+	if question < 0 || sure < 0 || question > sure {
+		t.Errorf("want the nickname question, then the confirmation:\n%s", p.stderr())
+	}
+	contains(t, "run", p.stdout(), "PASSED")
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "bw (example)")
+}
+
+func TestProjectsAddWithANicknameAndWithoutAsking(t *testing.T) {
+	for name, args := range map[string]func(root string) []string{
+		"flag before the folder": func(r string) []string { return []string{"projects", "add", "--name", "bw", r} },
+		"flag after the folder":  func(r string) []string { return []string{"projects", "add", r, "--name", "bw"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newProject(t, twoEnvironments)
+			listFor(t, p)
+			atATerminal(p, "should-not-be-read\n")
+			if code := p.do(args(p.root)...); code != ExitOK {
+				t.Fatalf("exit %d; %s", code, p.stderr())
+			}
+			contains(t, "add", p.stdout(), "Added bw", p.root)
+			if strings.Contains(p.stderr(), "nickname") {
+				t.Errorf("asked although --name was given:\n%s", p.stderr())
+			}
+			p.do("projects", "list")
+			contains(t, "list", p.stdout(), "bw (example)")
+
+			// On a listed project, --name changes the nickname.
+			if code := p.do("projects", "add", "--name", "birds", p.root); code != ExitOK {
+				t.Fatalf("second add: exit %d", code)
+			}
+			contains(t, "second add", p.stdout(), "Already in the list; now named birds")
+		})
+	}
+}
+
+func TestProjectsAddAsksAtATerminalWhenNoNameIsGiven(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	atATerminal(p, "photos\n")
+	if code := p.do("projects", "add", p.root); code != ExitOK {
+		t.Fatalf("exit %d; %s", code, p.stderr())
+	}
+	contains(t, "question", p.stderr(), nicknameQuestion)
+	contains(t, "add", p.stdout(), "Added photos")
+}
+
+func TestProjectsAddWithABadNicknameRefusesAndWritesNothing(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	list := listFor(t, p)
+	if code := p.do("projects", "add", "--name", "a/b", p.root); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), "cannot be used")
+	if exists(list) {
+		t.Error("a refused nickname created the list file")
+	}
+}
+
+func TestProjectsRenameAtAnyTime(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	p.do("projects", "add", p.root) // no terminal: no question
+
+	if code := p.do("projects", "rename", "example", "birdwatching"); code != ExitOK {
+		t.Fatalf("rename: exit %d; %s", code, p.stderr())
+	}
+	contains(t, "rename", p.stdout(), "Renamed example to birdwatching", p.root)
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "birdwatching (example)")
+
+	p.do("projects", "rename", "birdwatching", "birds") // found by its nickname
+	contains(t, "rename again", p.stdout(), "Renamed birdwatching to birds")
+
+	p.cwd = p.root
+	if code := p.do("projects", "rename", ".", ""); code != ExitOK { // by folder; "" clears
+		t.Fatalf("clear: exit %d; %s", code, p.stderr())
+	}
+	contains(t, "clear", p.stdout(), "Cleared the nickname of example")
+	p.do("projects", "list")
+	if strings.Contains(p.stdout(), "(example)") {
+		t.Errorf("the nickname is still shown:\n%s", p.stdout())
+	}
+
+	if code := p.do("projects", "rename", "nope", "x"); code != ExitError {
+		t.Errorf("rename of an unknown project: exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), `no project in the list is named "nope"`)
+	if code := p.do("projects", "rename", "example", "a/b"); code != ExitError {
+		t.Errorf("rename to a bad nickname: exit %d; want %d", code, ExitError)
+	}
+}
+
+func TestRemoveWorksByNicknameAndByManifestName(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	p.do("projects", "add", "--name", "bw", p.root)
+
+	if code := p.do("projects", "remove", "bw"); code != ExitOK {
+		t.Fatalf("remove by nickname: exit %d; %s", code, p.stderr())
+	}
+	contains(t, "remove", p.stdout(), "Removed bw")
+
+	p.do("projects", "add", "--name", "bw", p.root)
+	if code := p.do("projects", "remove", "example"); code != ExitOK { // the manifest's name still works
+		t.Fatalf("remove by manifest name: exit %d; %s", code, p.stderr())
+	}
+}
+
+func TestTheManifestNameRefreshesButNeverReplacesANickname(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	p.do("projects", "add", "--name", "bw", p.root)
+
+	renamed := strings.Replace(twoEnvironments, "project: example", "project: example-renamed", 1)
+	if err := os.WriteFile(filepath.Join(p.root, "test-manifest.yaml"), []byte(renamed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p.do("history") // using the project refreshes its manifest name
+	p.do("projects", "list")
+	contains(t, "list", p.stdout(), "bw (example-renamed)")
 }

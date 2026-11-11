@@ -60,7 +60,7 @@ Flags:
 	if err != nil {
 		return a.errorf("%v", err)
 	}
-	a.remember(loaded) // reading a project's history means this project is being used
+	a.remember(loaded, false) // reading a project's history means this project is being used
 	store, err := a.openIfExists(loaded)
 	if err != nil {
 		return a.errorf("%v", err)

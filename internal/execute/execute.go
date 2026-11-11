@@ -189,6 +189,27 @@ func failedCount(results []core.Result) int {
 	return n
 }
 
+// Preview is what a run would do, worked out and checked without starting or
+// saving anything.
+type Preview struct {
+	// Tests are the tests that would run, in order.
+	Tests []core.TestSpec
+	// Skipped are the selected tests that would be left out, with the reason.
+	Skipped []SkippedTest
+}
+
+// Preview makes every check that Run makes before its first command: the
+// environment exists, the selection is sound, and the environment's secrets can
+// be read. It starts nothing, saves nothing and needs no Store, so a caller can
+// ask for confirmation only about a run that could really start.
+func (s *Service) Preview(ctx context.Context, req Request) (Preview, error) {
+	p, err := s.prepare(ctx, req)
+	if err != nil {
+		return Preview{}, err
+	}
+	return Preview{Tests: p.tests, Skipped: p.skipped}, nil
+}
+
 // prepare checks the request and builds what the run needs. It starts
 // nothing.
 func (s *Service) prepare(ctx context.Context, req Request) (*plan, error) {

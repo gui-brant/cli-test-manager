@@ -345,6 +345,36 @@ func TestTestsThatCannotRunInTheEnvironment(t *testing.T) {
 	}
 }
 
+func TestPreviewChecksWithoutRunningAnything(t *testing.T) {
+	f := newFixture(t)
+	f.svc.Store = nil // a preview needs no store
+
+	p, err := f.svc.Preview(bg, Request{Manifest: f.manifest, Root: "/project", Environment: "deployed", Select: Selection{Feature: "accounts"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Tests) != 1 || p.Tests[0].ID != "login-flow" || len(p.Skipped) != 1 || p.Skipped[0].Test.ID != "users-table" {
+		t.Errorf("preview = %+v; want login-flow to run and users-table skipped", p)
+	}
+	if len(f.runner.calls) != 0 {
+		t.Errorf("%d commands ran during a preview", len(f.runner.calls))
+	}
+
+	// The same checks as a run: a wrong request is an error.
+	for name, req := range map[string]Request{
+		"an unknown environment": {Manifest: f.manifest, Environment: "nowhere"},
+		"an unknown test":        {Manifest: f.manifest, Environment: "local", Select: Selection{TestIDs: []string{"nope"}}},
+	} {
+		if _, err := f.svc.Preview(bg, req); err == nil {
+			t.Errorf("%s: the preview accepted it", name)
+		}
+	}
+	f.svc.Creds = fakeCreds{}
+	if _, err := f.svc.Preview(bg, Request{Manifest: f.manifest, Environment: "deployed"}); err == nil || !strings.Contains(err.Error(), "ACCOUNT_PASSWORD") {
+		t.Errorf("a preview with a missing secret: %v; want an error naming it", err)
+	}
+}
+
 func TestTheEnvironmentACommandGets(t *testing.T) {
 	f := newFixture(t)
 	f.mustRun("deployed", Selection{TestIDs: []string{"login-flow"}})
@@ -459,6 +489,15 @@ func TestFailuresThatTheResultsDoNotExplain(t *testing.T) {
 				return core.Output{Stdout: []byte("1..1\nok 1 - a\n"), TimedOut: true, ExitCode: 143}, nil
 			},
 			"timed out after 10m0s: ok 1 - a", 143, 1, "ok 1 - a",
+		},
+		{
+			// pgTAP prints its plan first, so a query that fails leaves a plan
+			// with no results. The plan finding must not hide the real cause.
+			"a crash right after the plan line", []string{"users-table"},
+			func(int, core.Invocation) (core.Output, error) {
+				return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("Error: no such table: pipetting_log\n"), ExitCode: 1}, nil
+			},
+			"exited with code 1: Error: no such table: pipetting_log", 1, 1, "Error: no such table: pipetting_log",
 		},
 		{
 			"a command that cannot start", []string{"users-table"},

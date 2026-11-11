@@ -38,10 +38,27 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 		return a.errorf("%v", err)
 	}
 
+	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now}
+	req := execute.Request{
+		Manifest:    m,
+		Root:        loaded.Root,
+		Environment: envName,
+		Select:      execute.Selection{TestIDs: ids, Feature: *feature},
+		Progress:    a.progress,
+	}
+
+	// Check everything first. Nobody should be asked "Are you sure?" about a run
+	// that cannot start, and a request that cannot start must not create the
+	// history file.
+	preview, err := svc.Preview(ctx, req)
+	if err != nil {
+		return a.errorf("%v", err)
+	}
+
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked.
 	if len(ids) == 0 && *feature == "" && !*yes && a.IsTerminal {
-		if !a.confirm(fmt.Sprintf("Run all %d tests in environment %q? [y/N] ", len(m.Tests), envName)) {
+		if !a.confirm(confirmationQuestion(preview, envName)) {
 			return a.errorf("not confirmed; nothing was run")
 		}
 	}
@@ -52,15 +69,18 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	}
 	defer store.Close()
 
-	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Store: store, Environ: a.Environ, Now: a.Now}
-	rep, err := svc.Run(ctx, execute.Request{
-		Manifest:    m,
-		Root:        loaded.Root,
-		Environment: envName,
-		Select:      execute.Selection{TestIDs: ids, Feature: *feature},
-		Progress:    a.progress,
-	})
+	svc.Store = store
+	rep, err := svc.Run(ctx, req)
 	return a.finishRun(m, rep, err)
+}
+
+// confirmationQuestion says what a run will really do, so the count matches
+// what happens: tests that would be skipped are not counted as run.
+func confirmationQuestion(p execute.Preview, env string) string {
+	if n := len(p.Skipped); n > 0 {
+		return fmt.Sprintf("Run %d of %d tests in environment %q (%d skipped)? [y/N] ", len(p.Tests), len(p.Tests)+n, env, n)
+	}
+	return fmt.Sprintf("Run all %d tests in environment %q? [y/N] ", len(p.Tests), env)
 }
 
 // confirm asks a yes/no question. Anything but yes is no. The question goes to

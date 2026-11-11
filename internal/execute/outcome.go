@@ -65,20 +65,28 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	}
 
 	results := make([]core.Result, 0, len(items)+1)
+	reported := 0 // failures the test tool itself reported
 	for _, it := range items {
 		r := it.Result
 		r.TestID, r.Feature = t.ID, t.Feature // the feature is recorded as it is now
 		results = append(results, r)
+		if r.Status.Failed() && !it.Synthetic {
+			reported++
+		}
 	}
 
-	// A non-zero exit that comes with a failing result is explained by it.
+	// A non-zero exit that comes with a failure the tool reported is explained
+	// by it. The parser's own findings about a broken stream do not count: a
+	// command that crashes right after printing its plan line leaves a "planned
+	// 1 tests but saw 0" result that says the stream is wrong, not why, and the
+	// real cause is on standard error.
 	var cause string
 	switch {
 	case out.TimedOut:
 		cause = "timed out after " + rs.Timeout.String()
 	case parseErr != nil:
 		cause = "could not read the results: " + p.redactor.Redact(parseErr.Error())
-	case out.ExitCode != 0 && failedCount(results) == 0:
+	case out.ExitCode != 0 && reported == 0:
 		cause = fmt.Sprintf("exited with code %d", out.ExitCode)
 	case len(results) == 0:
 		cause = "no results"

@@ -327,6 +327,58 @@ func TestConfirmationBeforeRunningEveryTest(t *testing.T) {
 	}
 }
 
+// The bug the owner found by using the program: `run --env nowhere` asked "Are
+// you sure?" about an environment that does not exist, and only complained
+// after the answer. A run that cannot start must be refused BEFORE any question.
+func TestNoQuestionIsAskedAboutARunThatCannotStart(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		creds fakeCreds
+		want  string
+	}{
+		{"an unknown environment", []string{"run", "--env", "nowhere"}, nil, `environment "nowhere" is not defined`},
+		{"another unknown environment", []string{"run", "--env", "asdfadfa"}, nil, `environment "asdfadfa" is not defined`},
+		{"a missing secret", []string{"run", "--env", "deployed"}, fakeCreds{}, "secrets not set: ACCOUNT_PASSWORD"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := newProject(t, twoEnvironments)
+			p.deps.IsTerminal = true
+			p.deps.Stdin = strings.NewReader("y\n") // would say yes, if it were asked
+			if c.creds != nil {
+				p.deps.Creds = c.creds
+			}
+			if code := p.do(c.args...); code != ExitError {
+				t.Fatalf("exit %d; want %d", code, ExitError)
+			}
+			contains(t, "stderr", p.stderr(), c.want)
+			if strings.Contains(p.stderr()+p.stdout(), "[y/N]") {
+				t.Error("the question was asked about a run that could not start")
+			}
+			if len(p.runner.calls) != 0 {
+				t.Error("a command ran")
+			}
+			if p.historyExists() {
+				t.Error("a request that could not start created the history file")
+			}
+		})
+	}
+}
+
+// The count in the question must match what will happen: tests that will be
+// skipped are not counted as run.
+func TestTheQuestionCountsWhatWillReallyRun(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.deps.IsTerminal = true
+	p.deps.Stdin = strings.NewReader("n\n")
+	p.do("run", "--env", "deployed") // users-table cannot run there
+	contains(t, "stderr", p.stderr(), `Run 2 of 3 tests in environment "deployed" (1 skipped)? [y/N]`)
+	if len(p.runner.calls) != 0 {
+		t.Error("tests ran although the question was declined")
+	}
+}
+
 func TestCtrlCDiscardsTheRun(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	ctx, cancel := context.WithCancel(context.Background())

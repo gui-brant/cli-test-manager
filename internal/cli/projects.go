@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -20,7 +21,7 @@ used wherever a name is. rename with an empty nickname ("") clears it.
 `
 
 // cmdProjects manages the list of projects the program knows about.
-func (a *app) cmdProjects(args []string) int {
+func (a *app) cmdProjects(ctx context.Context, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(a.Stderr, "tester: projects needs list, add, rename or remove\n\n"+projectsUsage)
 		return ExitError
@@ -33,7 +34,7 @@ func (a *app) cmdProjects(args []string) int {
 	case "list":
 		return a.projectsList(rest)
 	case "add":
-		return a.projectsAdd(rest)
+		return a.projectsAdd(ctx, rest)
 	case "rename":
 		return a.projectsRename(rest)
 	case "remove":
@@ -84,7 +85,7 @@ func (a *app) projectsList(rest []string) int {
 	return ExitOK
 }
 
-func (a *app) projectsAdd(args []string) int {
+func (a *app) projectsAdd(ctx context.Context, args []string) int {
 	fs := a.flags("projects add")
 	name := fs.String("name", "", "a nickname for the project, shown instead of the name in its manifest")
 	if code, stop := a.parseFlags(fs, args, 100); stop {
@@ -112,10 +113,12 @@ func (a *app) projectsAdd(args []string) int {
 
 	var ask projects.Asker
 	if *name == "" {
-		ask = a.nicknameAsker(false)
+		ask = a.nicknameAsker(ctx, false)
 	}
 	p, added, err := svc.Add(dir, *name, ask)
 	switch {
+	case errors.Is(err, context.Canceled):
+		return a.cancelled()
 	case err != nil:
 		return a.errorf("%v", err)
 	case added:
@@ -203,35 +206,53 @@ func looksLikeFolder(key string) bool {
 // nicknameAsker returns the question to ask when a project is newly added, or
 // nil when nobody can be asked: only a person at a real terminal can answer
 // (a push hook cannot), and skip is set when the owner said not to ask.
-func (a *app) nicknameAsker(skip bool) projects.Asker {
+func (a *app) nicknameAsker(ctx context.Context, skip bool) projects.Asker {
 	if skip || !a.IsTerminal {
 		return nil
 	}
-	return func(name string) string {
+	return func(name string) (string, error) {
 		fmt.Fprintf(a.Stderr, "The project will be listed as %q. Add a nickname? (Enter to keep the name): ", name)
 		line, ok := a.readLine()
+		if err := ctx.Err(); err != nil { // Ctrl-C: the owner is cancelling, not answering
+			return "", err
+		}
 		if !ok {
-			return ""
+			return "", nil
 		}
 		nick, err := projects.CheckNickname(line)
 		if err != nil {
 			fmt.Fprintf(a.Stderr, "tester: %v; keeping the name %q\n", err, name)
-			return ""
+			return "", nil
 		}
-		return nick
+		return nick, nil
 	}
+}
+
+// cancelled ends a command that the owner stopped with Ctrl-C while it was
+// asking something: nothing has been changed.
+func (a *app) cancelled() int {
+	fmt.Fprintln(a.Stderr, "\ntester: cancelled; nothing was changed")
+	return ExitCancelled
 }
 
 // remember records that the project is being used. The list is bookkeeping: if
 // it cannot be updated, the command still does its work and a one-line warning
 // goes to standard error. A project new to the list asks for a nickname when a
-// person at a terminal can answer, unless skipAsk is set.
-func (a *app) remember(l *manifestfile.Loaded, skipAsk bool) {
+// person at a terminal can answer, unless skipAsk is set. It returns true when
+// the owner cancelled with Ctrl-C while being asked: the caller must stop, and
+// nothing was added.
+func (a *app) remember(ctx context.Context, l *manifestfile.Loaded, skipAsk bool) (cancelled bool) {
 	if a.ProjectsFile == "" {
-		return
+		return false
 	}
 	svc := &projects.Service{File: a.ProjectsFile}
-	if _, _, err := svc.Use(projects.Project{Name: l.Manifest.Project, Path: l.Root}, a.nicknameAsker(skipAsk)); err != nil {
+	_, _, err := svc.Use(projects.Project{Name: l.Manifest.Project, Path: l.Root}, a.nicknameAsker(ctx, skipAsk))
+	switch {
+	case errors.Is(err, context.Canceled):
+		a.cancelled()
+		return true
+	case err != nil:
 		fmt.Fprintf(a.Stderr, "tester: warning: the list of projects could not be updated: %v\n", err)
 	}
+	return false
 }

@@ -117,7 +117,7 @@ func Main(ctx context.Context, args []string, d Deps) int {
 	case "check":
 		return a.cmdCheck(manifestPath, rest)
 	case "projects":
-		return a.cmdProjects(rest)
+		return a.cmdProjects(ctx, rest)
 	}
 	fmt.Fprintf(a.Stderr, "tester: unknown command %q\n\n", cmd)
 	a.usage(a.Stderr)

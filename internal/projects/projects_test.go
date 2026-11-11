@@ -314,7 +314,7 @@ func TestTheAskerIsCalledOnlyForANewProjectWithNoNickname(t *testing.T) {
 	s := service(t)
 	calls := 0
 	var asked string
-	ask := func(name string) string { calls++; asked = name; return "bw" }
+	ask := func(name string) (string, error) { calls++; asked = name; return "bw", nil }
 
 	dir := project(t, "se3316-lab3-birdwatching")
 	p, added, err := s.Add(dir, "", ask)
@@ -338,9 +338,26 @@ func TestTheAskerIsCalledOnlyForANewProjectWithNoNickname(t *testing.T) {
 
 	// An asker that answers nothing keeps the manifest's name.
 	third := project(t, "third")
-	p, _, err = s.Use(Project{Name: "third", Path: third}, func(string) string { return "" })
+	p, _, err = s.Use(Project{Name: "third", Path: third}, func(string) (string, error) { return "", nil })
 	if err != nil || p.Nickname != "" || p.Display() != "third" {
 		t.Errorf("an empty answer: %+v, %v; want no nickname", p, err)
+	}
+}
+
+// An owner who cancels the question stops the add: nothing is written.
+func TestAnAskerThatFailsStopsTheAddBeforeAnythingIsWritten(t *testing.T) {
+	s := service(t)
+	dir := project(t, "photo-app")
+	boom := errors.New("cancelled")
+
+	if _, _, err := s.Add(dir, "", func(string) (string, error) { return "", boom }); !errors.Is(err, boom) {
+		t.Errorf("Add: %v; want the asker's error", err)
+	}
+	if _, _, err := s.Use(Project{Name: "photo-app", Path: dir}, func(string) (string, error) { return "", boom }); !errors.Is(err, boom) {
+		t.Errorf("Use: %v; want the asker's error", err)
+	}
+	if exists(s.File) {
+		t.Error("a cancelled question still wrote the list file")
 	}
 }
 

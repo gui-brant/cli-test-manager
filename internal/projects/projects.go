@@ -71,8 +71,9 @@ type Entry struct {
 
 // Asker is called when a project is newly added and no nickname was given. It
 // is handed the name the project will be listed under and returns a nickname,
-// or "" to keep the name. A nil Asker means nobody can be asked.
-type Asker func(name string) string
+// or "" to keep the name. An error stops the add before anything is written (the
+// owner cancelled). A nil Asker means nobody can be asked.
+type Asker func(name string) (string, error)
 
 // CheckNickname trims a nickname and says whether it can be used. "" is valid and
 // means no nickname. A nickname cannot contain a path separator or be "." or
@@ -193,7 +194,11 @@ func (s *Service) remember(p Project, nickname string, ask Asker) (Project, bool
 	}
 
 	if nickname == "" && ask != nil {
-		nickname = ask(p.Name)
+		answer, err := ask(p.Name)
+		if err != nil {
+			return Project{}, false, err
+		}
+		nickname = answer
 	}
 	p.Nickname = nickname
 	return p, true, s.write(append(list, p))

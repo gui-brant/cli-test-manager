@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -490,4 +492,69 @@ func TestTheManifestNameRefreshesButNeverReplacesANickname(t *testing.T) {
 	p.do("history") // using the project refreshes its manifest name
 	p.do("projects", "list")
 	contains(t, "list", p.stdout(), "bw (example-renamed)")
+}
+
+// ---- Ctrl-C while being asked ----
+
+// cancelsOnRead is an input that is interrupted by Ctrl-C the moment the program
+// waits for a line: it cancels the program's context and then ends.
+type cancelsOnRead struct{ cancel context.CancelFunc }
+
+func (c cancelsOnRead) Read([]byte) (int, error) {
+	c.cancel()
+	return 0, io.EOF
+}
+
+// Ctrl-C at the nickname question stops the command: exit 130, and the project
+// is not added (found by trying it on a real terminal).
+func TestCtrlCAtTheNicknameQuestionCancelsAndAddsNothing(t *testing.T) {
+	for _, args := range [][]string{
+		{"history"},
+		{"run", "--env", "local"},
+		{"projects", "add"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			p := newProject(t, twoEnvironments)
+			list := listFor(t, p)
+			p.cwd = p.root
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p.deps.IsTerminal = true
+			p.deps.Stdin = cancelsOnRead{cancel}
+
+			if code := p.doCtx(ctx, args...); code != ExitCancelled {
+				t.Errorf("exit %d; want %d (stderr: %s)", code, ExitCancelled, p.stderr())
+			}
+			contains(t, "stderr", p.stderr(), "Add a nickname?", "cancelled; nothing was changed")
+			if exists(list) {
+				t.Error("a cancelled question still added the project")
+			}
+			if len(p.runner.calls) != 0 || p.historyExists() {
+				t.Error("a cancelled question still ran tests or created the history")
+			}
+		})
+	}
+}
+
+// Ctrl-C at "Are you sure?" is a cancel (130), not a "no" (2), and nothing runs.
+func TestCtrlCAtTheConfirmationCancels(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+	p.do("projects", "add", p.root) // already listed: no nickname question
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.deps.IsTerminal = true
+	p.deps.Stdin = cancelsOnRead{cancel}
+
+	if code := p.doCtx(ctx, "run", "--env", "local"); code != ExitCancelled {
+		t.Errorf("exit %d; want %d (stderr: %s)", code, ExitCancelled, p.stderr())
+	}
+	contains(t, "stderr", p.stderr(), "[y/N]", "cancelled; nothing was run")
+	if strings.Contains(p.stderr(), "not confirmed") {
+		t.Errorf("a Ctrl-C was reported as a 'no':\n%s", p.stderr())
+	}
+	if len(p.runner.calls) != 0 || p.historyExists() {
+		t.Error("tests ran or the history was created")
+	}
 }

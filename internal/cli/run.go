@@ -53,12 +53,19 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	if err != nil {
 		return a.errorf("%v", err)
 	}
-	a.remember(loaded, *yes) // the request is sound, so this project is being used; --yes asks nothing
+	// The request is sound, so this project is being used; --yes asks nothing.
+	if a.remember(ctx, loaded, *yes) {
+		return ExitCancelled
+	}
 
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked.
 	if len(ids) == 0 && *feature == "" && !*yes && a.IsTerminal {
 		if !a.confirm(confirmationQuestion(preview, envName)) {
+			if ctx.Err() != nil { // Ctrl-C at the question is a cancel, not a "no"
+				fmt.Fprintln(a.Stderr, "\ntester: cancelled; nothing was run")
+				return ExitCancelled
+			}
 			return a.errorf("not confirmed; nothing was run")
 		}
 	}

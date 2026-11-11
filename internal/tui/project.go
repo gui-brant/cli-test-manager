@@ -18,6 +18,7 @@ import (
 // selection is what the owner has chosen so far on the way to an action: the
 // project, then a feature, then an environment (entries 37 and 38).
 type selection struct {
+	deps    Deps
 	entry   projects.Entry
 	loaded  *manifestfile.Loaded
 	feature string
@@ -183,8 +184,8 @@ type featureScreen struct {
 	pick  *picker
 }
 
-func newFeatureScreen(e projects.Entry, l *manifestfile.Loaded) *featureScreen {
-	s := &featureScreen{sel: selection{entry: e, loaded: l}}
+func newFeatureScreen(d Deps, e projects.Entry, l *manifestfile.Loaded) *featureScreen {
+	s := &featureScreen{sel: selection{deps: d, entry: e, loaded: l}}
 	features := append([]string(nil), l.Manifest.Features...)
 	// Tests that belong to no feature are in "general", which the manifest does
 	// not have to list; without a row for it they could not be reached.
@@ -285,7 +286,7 @@ type actionScreen struct {
 func newActionScreen(sel selection) *actionScreen {
 	total, inEnv := sel.testsOf(sel.feature, sel.env)
 	items := []pickItem{
-		{"Run history", "the runs of this project, newest first"},
+		{"Run history", fmt.Sprintf("the runs of %s in %s, newest first", sel.feature, sel.env)},
 		{"Counts", "how each test has done"},
 		{"Tests", fmt.Sprintf("the %s of %s, and their code", noun(total, "test", "tests"), sel.feature)},
 		{"Run all", fmt.Sprintf("%s in %s, asks first", noun(inEnv, "test", "tests"), sel.env)},
@@ -300,7 +301,12 @@ func (s *actionScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 	}
 	if key, ok := msg.(tea.KeyMsg); ok {
 		if key.String() == "enter" {
-			if i := s.pick.at(); i >= 0 {
+			i := s.pick.at()
+			switch {
+			case i < 0:
+			case s.pick.items[i].label == "Run history":
+				return s, nav{push: newHistoryScreen(s.sel)}, nil
+			default:
 				s.status = s.pick.items[i].label + " is built in a later step of the menu."
 			}
 			return s, nav{}, nil

@@ -21,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/gui-brant/cli-test-manager/internal/core"
 	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/projects"
 )
@@ -38,6 +39,9 @@ type Deps struct {
 	Projects Projects
 	// Load reads a project's manifest from the path of its manifest file.
 	Load func(path string) (*manifestfile.Loaded, error)
+	// History opens the history file at this path for reading. It returns a nil
+	// store and no error when there is no file yet, and never creates one.
+	History func(path string) (core.Store, error)
 	// Loc is the zone times are shown in. Nil means the local zone.
 	Loc *time.Location
 }

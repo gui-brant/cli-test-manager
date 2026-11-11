@@ -176,7 +176,7 @@ func (c *chooser) open() (screen, nav, tea.Cmd) {
 		return c, nav{}, nil
 	}
 	c.status = ""
-	return c, nav{push: newFeatureScreen(e, loaded)}, nil
+	return c, nav{push: newFeatureScreen(c.deps, e, loaded)}, nil
 }
 
 func (c *chooser) answerForget(key tea.KeyMsg) (screen, nav, tea.Cmd) {

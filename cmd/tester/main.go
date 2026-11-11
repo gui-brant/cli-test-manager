@@ -3,17 +3,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/gui-brant/cli-test-manager/internal/cli"
+	"github.com/gui-brant/cli-test-manager/internal/core"
 	"github.com/gui-brant/cli-test-manager/internal/creds/env"
 	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/projects"
 	"github.com/gui-brant/cli-test-manager/internal/runner"
+	"github.com/gui-brant/cli-test-manager/internal/store/sqlite"
 	"github.com/gui-brant/cli-test-manager/internal/tui"
 )
 
@@ -44,6 +48,7 @@ func main() {
 			return tui.Run(ctx, in, out, tui.Deps{
 				Projects: &projects.Service{File: projectsFile},
 				Load:     manifestfile.Load,
+				History:  openHistory,
 				Loc:      time.Local,
 			})
 		},
@@ -51,6 +56,18 @@ func main() {
 
 	stop()
 	os.Exit(code)
+}
+
+// openHistory opens a history file for the menu to read. With no file yet it
+// returns no store and no error, so reading never creates one.
+func openHistory(path string) (core.Store, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return sqlite.Open(path)
 }
 
 // isTerminal reports whether f is a terminal, that is, whether a person can

@@ -3,6 +3,7 @@ package execute
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
@@ -65,11 +66,15 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	}
 
 	results := make([]core.Result, 0, len(items)+1)
-	reported := 0 // failures the test tool itself reported
+	own := make([]core.Result, 0, len(items)+1) // without the parser's findings
+	reported := 0                               // failures the test tool itself reported
 	for _, it := range items {
 		r := it.Result
 		r.TestID, r.Feature = t.ID, t.Feature // the feature is recorded as it is now
 		results = append(results, r)
+		if !it.Synthetic {
+			own = append(own, r)
+		}
 		if r.Status.Failed() && !it.Synthetic {
 			reported++
 		}
@@ -96,16 +101,45 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	}
 
 	tail := outputTail(stdout, stderr)
-	if line := lastLine(tail); line != "" {
-		cause += ": " + line
+	last := lastLine(tail)
+	if last != "" {
+		cause += ": " + last
 	}
 	code := out.ExitCode
 	if code == 0 {
 		code = -1
 	}
-	results = append(results, errorResult(t, cause))
-	return results, &failure{exitCode: code, cause: cause, output: tail}, nil
+	// One error per failed test: the real cause replaces the parser's finding
+	// that the stream is wrong ("planned 1 tests but saw 0"), which only says
+	// that something broke, not why.
+	results = append(own, errorResult(t, cause))
+	return results, &failure{exitCode: code, cause: cause, output: diagnosticBody(tail, last, rs.Format)}, nil
 }
+
+// diagnosticBody is the part of a failed command's output worth showing under
+// the cause. The cause already ends with the output's last line, and a TAP
+// stream's plan line ("1..3") says nothing about why the command failed, so
+// neither is repeated.
+func diagnosticBody(tail, last string, format core.ResultFormat) string {
+	lines := strings.Split(tail, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if format == core.FormatTAP && tapPlanLine.MatchString(l) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
+		kept = kept[:len(kept)-1]
+	}
+	if len(kept) > 0 && last != "" && strings.TrimSpace(kept[len(kept)-1]) == last {
+		kept = kept[:len(kept)-1]
+	}
+	return strings.Join(kept, "\n")
+}
+
+// tapPlanLine matches a TAP plan line such as "1..3".
+var tapPlanLine = regexp.MustCompile(`^\s*1\.\.\d+\s*$`)
 
 // expand fills a runner's argument list for one test. Only the files
 // placeholder is replaced; the report placeholder is left for the runner,

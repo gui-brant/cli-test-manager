@@ -70,9 +70,14 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	t := newTable(a.Stdout)
 	fmt.Fprintln(t, "ID\tWHEN\tSOURCE\tENV\tRESULT\tFAILED\tFEATURES\tREASON")
 	for _, r := range rows {
+		reason := shorten(r.Reason, 60)
+		if r.Outcome == core.OutcomeFail {
+			// Point at where the causes are, instead of showing one of them.
+			reason += fmt.Sprintf("; details: tester history %d", r.ID)
+		}
 		fmt.Fprintf(t, "%d\t%s\t%s\t%s\t%s\t%d/%d\t%s\t%s\n",
 			r.ID, a.when(r.StartedAt), r.Source, dash(r.Environment), resultWord(r.State, r.Outcome),
-			r.Failed, r.Total, dash(strings.Join(r.Features, ",")), shorten(r.Reason, 60))
+			r.Failed, r.Total, dash(strings.Join(r.Features, ",")), reason)
 	}
 	t.Flush()
 	return ExitOK

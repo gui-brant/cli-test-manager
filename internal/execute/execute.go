@@ -153,7 +153,11 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 			if run.ExitCode == 0 {
 				run.ExitCode = fail.exitCode
 			}
-			diagnostics = append(diagnostics, fmt.Sprintf("[%s] %s\n%s", t.ID, fail.cause, fail.output))
+			block := fmt.Sprintf("[%s] %s", t.ID, fail.cause)
+			if fail.output != "" {
+				block += "\n" + fail.output
+			}
+			diagnostics = append(diagnostics, block)
 			done.Failed, done.Reason = true, fail.cause
 		} else if n := failedCount(results); n > 0 {
 			done.Failed, done.Reason = true, fmt.Sprintf("%d of %d results failed", n, len(results))
@@ -162,7 +166,8 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 	}
 
 	run.FinishedAt = s.now()
-	run.Diagnostic = core.TailDiagnostic(strings.TrimRight(strings.Join(diagnostics, "\n"), "\n"))
+	// One block per failed test, with a blank line between blocks.
+	run.Diagnostic = core.TailDiagnostic(strings.TrimRight(strings.Join(diagnostics, "\n\n"), "\n"))
 
 	id, err := s.Store.SaveRun(ctx, run)
 	if err != nil {

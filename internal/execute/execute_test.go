@@ -466,54 +466,53 @@ func TestFailuresThatTheResultsDoNotExplain(t *testing.T) {
 		reply      func(int, core.Invocation) (core.Output, error)
 		wantCause  string // the error result's message
 		wantExit   int
-		wantBefore int    // results that come before the error result
-		wantReason string // the run's reason
+		wantBefore int // results that come before the error result
 	}{
 		{
 			"a non-zero exit with every result passing", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) {
 				return core.Output{Stdout: []byte("1..1\nok 1 - fine\n"), Stderr: []byte("boom: disk full\n"), ExitCode: 3}, nil
 			},
-			"exited with code 3: boom: disk full", 3, 1, "boom: disk full",
+			"exited with code 3: boom: disk full", 3, 1,
 		},
 		{
 			"a non-zero exit with no results", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) {
 				return core.Output{Stdout: []byte("Segmentation fault\n"), ExitCode: 2}, nil
 			},
-			"exited with code 2: Segmentation fault", 2, 0, "Segmentation fault",
+			"exited with code 2: Segmentation fault", 2, 0,
 		},
 		{
 			"a timeout", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) {
 				return core.Output{Stdout: []byte("1..1\nok 1 - a\n"), TimedOut: true, ExitCode: 143}, nil
 			},
-			"timed out after 10m0s: ok 1 - a", 143, 1, "ok 1 - a",
+			"timed out after 10m0s: ok 1 - a", 143, 1,
 		},
 		{
 			// pgTAP prints its plan first, so a query that fails leaves a plan
-			// with no results. The plan finding must not hide the real cause.
+			// with no results. The parser's "planned 1 tests but saw 0" is not
+			// kept beside the real cause: one error per crashed test.
 			"a crash right after the plan line", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) {
 				return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("Error: no such table: pipetting_log\n"), ExitCode: 1}, nil
 			},
-			"exited with code 1: Error: no such table: pipetting_log", 1, 1, "Error: no such table: pipetting_log",
+			"exited with code 1: Error: no such table: pipetting_log", 1, 0,
 		},
 		{
 			"a command that cannot start", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) { return core.Output{}, errors.New("exec: not found") },
-			"could not start the command: exec: not found", -1, 0, "could not start the command: exec: not found",
+			"could not start the command: exec: not found", -1, 0,
 		},
 		{
 			"an exit of 0 with no results", []string{"users-table"},
 			func(int, core.Invocation) (core.Output, error) { return core.Output{}, nil },
-			"no results", -1, 0, "[users-table] no results",
+			"no results", -1, 0,
 		},
 		{
 			"results that cannot be read", []string{"login-flow"},
 			func(int, core.Invocation) (core.Output, error) { return core.Output{Report: []byte("<html/>")}, nil },
 			"could not read the results: junit: unexpected root element <html>", -1, 0,
-			"[login-flow] could not read the results: junit: unexpected root element <html>; want <testsuites> or <testsuite>",
 		},
 	}
 	for _, c := range cases {
@@ -544,10 +543,42 @@ func TestFailuresThatTheResultsDoNotExplain(t *testing.T) {
 			if v.Outcome != core.OutcomeFail {
 				t.Errorf("verdict %+v; want fail", v)
 			}
-			if got := strings.TrimSpace(v.Reason); got != strings.TrimSpace(c.wantReason) {
-				t.Errorf("reason %q; want %q (the real cause, not a generic message)", got, c.wantReason)
+			// The reason counts failures; the cause of each is in its own result.
+			if want := fmt.Sprintf("1 of %d results failed", c.wantBefore+1); v.Reason != want {
+				t.Errorf("reason %q; want %q", v.Reason, want)
 			}
 		})
+	}
+}
+
+// The diagnostic has one block per failed test. A block names the test and the
+// cause, and shows no TAP plan line and no repeat of the cause's last line.
+func TestDiagnosticHasOneBlockPerFailedTest(t *testing.T) {
+	f := newFixture(t)
+	f.runner.reply = func(n int, inv core.Invocation) (core.Output, error) {
+		switch n {
+		case 1:
+			return core.Output{Stdout: []byte("1..1\n"), Stderr: []byte("Error: no such table: log\n"), ExitCode: 2}, nil
+		case 2:
+			return core.Output{Stdout: []byte("# warming up\n"), TimedOut: true, ExitCode: 143}, nil
+		}
+		return defaultReply(n, inv)
+	}
+	run := f.mustRun("local", Selection{TestIDs: []string{"users-table", "login-flow"}}).Run
+
+	blocks := strings.Split(run.Diagnostic, "\n\n")
+	if len(blocks) != 2 {
+		t.Fatalf("%d blocks in %q; want one per failed test", len(blocks), run.Diagnostic)
+	}
+	if !strings.HasPrefix(blocks[0], "[users-table] exited with code 2: Error: no such table: log") ||
+		!strings.HasPrefix(blocks[1], "[login-flow] timed out after") {
+		t.Errorf("blocks %q do not start with the test and its cause", blocks)
+	}
+	if strings.Contains(run.Diagnostic, "1..1") {
+		t.Errorf("the diagnostic shows a TAP plan line: %q", run.Diagnostic)
+	}
+	if n := strings.Count(run.Diagnostic, "no such table"); n != 1 {
+		t.Errorf("the cause appears %d times; want once: %q", n, run.Diagnostic)
 	}
 }
 
@@ -586,8 +617,8 @@ func TestACrashDoesNotStopTheOtherTests(t *testing.T) {
 	if len(run.Results) != 2 || run.Results[0].Status != core.StatusError || run.Results[1].Status != core.StatusPass {
 		t.Fatalf("results %+v; want the crash, then the passing test", run.Results)
 	}
-	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "kaboom" || run.ExitCode != 2 {
-		t.Errorf("verdict %+v, exit code %d; want a failed run whose reason is the crash", v, run.ExitCode)
+	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "1 of 2 results failed" || run.ExitCode != 2 {
+		t.Errorf("verdict %+v, exit code %d; want a failed run that counts the crash as a failure", v, run.ExitCode)
 	}
 }
 

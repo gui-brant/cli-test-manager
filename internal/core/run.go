@@ -164,15 +164,15 @@ type Verdict struct {
 // Verdict decides the run's overall outcome. In order:
 //
 //  1. A pending or expired run has no verdict (undetermined).
-//  2. A non-zero exit code from the command fails the run, even if every
+//  2. Any failed or errored result fails the run, with the reason "N of M
+//     results failed". Each failure's own cause is in its result.
+//  3. A non-zero exit code from the command fails the run, even if every
 //     parsed result passed (a crash after the last test must not look green).
-//  3. A run with no results at all fails with "no results", so a command that
+//  4. A run with no results at all fails with "no results", so a command that
 //     prints nothing is never shown as a pass.
 //
-// In steps 2 and 3, when the run has a Diagnostic, the reason is the last line
-// of it (the real cause) instead of the generic wording. Failed results keep
-// their own reason in step 4; the diagnostic is still stored beside them.
-//  4. Any failed or errored result fails the run.
+// In steps 3 and 4, when the run has a Diagnostic, the reason is the last line
+// of it (the real cause) instead of the generic wording.
 //  5. Otherwise the run passes. Skipped results do not count against it.
 func (r Run) Verdict() Verdict {
 	switch r.State {
@@ -181,20 +181,23 @@ func (r Run) Verdict() Verdict {
 	case RunExpired:
 		return Verdict{Outcome: OutcomeUndetermined, Reason: "results expired"}
 	}
-	if r.ExitCode != 0 {
-		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr(fmt.Sprintf("command exited with code %d", r.ExitCode))}
-	}
-	if len(r.Results) == 0 {
-		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr("no results")}
-	}
 	failed := 0
 	for _, res := range r.Results {
 		if res.Status.Failed() {
 			failed++
 		}
 	}
+	// Failed results come first: a count says what happened to the whole run,
+	// and each failure's own cause is in its result. Picking one failure's cause
+	// as the run's reason would hide the others.
 	if failed > 0 {
 		return Verdict{Outcome: OutcomeFail, Reason: fmt.Sprintf("%d of %d results failed", failed, len(r.Results))}
+	}
+	if r.ExitCode != 0 {
+		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr(fmt.Sprintf("command exited with code %d", r.ExitCode))}
+	}
+	if len(r.Results) == 0 {
+		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr("no results")}
 	}
 	return Verdict{Outcome: OutcomePass}
 }

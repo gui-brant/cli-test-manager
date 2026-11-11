@@ -483,10 +483,14 @@ func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 	if code := p.do("run", "--env", "local", "--test", "users-table"); code != ExitFailed {
 		t.Fatalf("exit %d", code)
 	}
-	contains(t, "summary", p.stdout(), "Run 1: FAILED (kaboom)", "ERROR #1 users-table Users table checks: exited with code 2: kaboom")
+	contains(t, "summary", p.stdout(), "Run 1: FAILED (1 of 1 results failed)", "ERROR #1 users-table Users table checks: exited with code 2: kaboom")
 
 	p.do("history", "1")
 	contains(t, "detail", p.stdout(), "exit code 2", "Diagnostic:", "[users-table] exited with code 2: kaboom")
+
+	// The list does not pick one failure's cause: it counts, and points at the details.
+	p.do("history")
+	contains(t, "list", p.stdout(), "1 of 1 results failed; details: tester history 1")
 }
 
 func TestNoHistoryYet(t *testing.T) {

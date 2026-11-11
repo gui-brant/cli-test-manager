@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // listFor gives a project its own project list file, in a folder that does not
@@ -557,4 +558,67 @@ func TestCtrlCAtTheConfirmationCancels(t *testing.T) {
 	if len(p.runner.calls) != 0 || p.historyExists() {
 		t.Error("tests ran or the history was created")
 	}
+}
+
+// Found by the owner in a real terminal: Ctrl-C did nothing until Enter was
+// pressed, because the read of the answer was still waiting. The input here
+// never ends and nothing is typed, like a terminal where the person only
+// presses Ctrl-C; the command must stop at once.
+func TestCtrlCStopsAQuestionThatIsStillWaitingForAnAnswer(t *testing.T) {
+	for _, args := range [][]string{{"history"}, {"run", "--env", "local"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			p := newProject(t, twoEnvironments)
+			list := listFor(t, p)
+			if args[0] == "run" {
+				p.do("projects", "add", p.root) // so the question is "Are you sure?"
+			}
+			reader, writer := io.Pipe()
+			defer writer.Close()
+			p.deps.IsTerminal = true
+			p.deps.Stdin = reader
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				time.Sleep(100 * time.Millisecond) // the question is on screen by now
+				cancel()
+			}()
+			done := make(chan int, 1)
+			go func() { done <- p.doCtx(ctx, args...) }()
+
+			select {
+			case code := <-done:
+				if code != ExitCancelled {
+					t.Errorf("exit %d; want %d (stderr: %s)", code, ExitCancelled, p.stderr())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("the command was still waiting for an answer after Ctrl-C")
+			}
+			if args[0] == "history" && exists(list) {
+				t.Error("the cancelled question still added the project")
+			}
+		})
+	}
+}
+
+// With no folder, `projects add` means the project the current folder belongs
+// to, found like every other command finds it: from a subfolder it climbs up.
+func TestProjectsAddWithNoFolderFindsTheProjectAbove(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	listFor(t, p)
+
+	p.cwd = filepath.Join(p.root, "tests", "sql") // a subfolder of the project
+	if code := p.do("projects", "add"); code != ExitOK {
+		t.Fatalf("exit %d; %s", code, p.stderr())
+	}
+	contains(t, "add", p.stdout(), "Added example", p.root)
+	if strings.Contains(p.stdout(), filepath.Join("tests", "sql")) {
+		t.Errorf("the subfolder was listed instead of the project:\n%s", p.stdout())
+	}
+
+	p.cwd = t.TempDir() // nowhere near a project
+	if code := p.do("projects", "add"); code != ExitError {
+		t.Errorf("outside any project: exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), "test-manifest.yaml")
 }

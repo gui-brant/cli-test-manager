@@ -61,7 +61,7 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked.
 	if len(ids) == 0 && *feature == "" && !*yes && a.IsTerminal {
-		if !a.confirm(confirmationQuestion(preview, envName)) {
+		if !a.confirm(ctx, confirmationQuestion(preview, envName)) {
 			if ctx.Err() != nil { // Ctrl-C at the question is a cancel, not a "no"
 				fmt.Fprintln(a.Stderr, "\ntester: cancelled; nothing was run")
 				return ExitCancelled
@@ -92,9 +92,9 @@ func confirmationQuestion(p execute.Preview, env string) string {
 
 // confirm asks a yes/no question. Anything but yes is no. The question goes to
 // standard error, so piping or redirecting the run's output never hides it.
-func (a *app) confirm(prompt string) bool {
+func (a *app) confirm(ctx context.Context, prompt string) bool {
 	fmt.Fprint(a.Stderr, prompt)
-	line, ok := a.readLine()
+	line, ok := a.readLine(ctx)
 	if !ok {
 		return false
 	}

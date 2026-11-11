@@ -98,11 +98,15 @@ func (a *app) projectsAdd(ctx context.Context, args []string) int {
 		}
 		rest = rest[:1]
 	}
-	dir := "."
+	var dir string
+	var err error
 	if len(rest) == 1 {
-		dir = rest[0]
+		dir, err = a.inCurrentFolder(rest[0])
+	} else {
+		// No folder: the project the current folder belongs to, found the way
+		// every other command finds it (this folder or the nearest one above).
+		dir, err = a.currentProject()
 	}
-	dir, err := a.inCurrentFolder(dir)
 	if err != nil {
 		return a.errorf("%v", err)
 	}
@@ -184,6 +188,20 @@ func (a *app) projectKey(key string) (string, error) {
 	return key, nil
 }
 
+// currentProject returns the folder of the project the current folder belongs
+// to: the nearest one at or above it that holds a manifest.
+func (a *app) currentProject() (string, error) {
+	wd, err := a.Getwd()
+	if err != nil {
+		return "", err
+	}
+	manifest, err := manifestfile.Find(wd)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(manifest), nil
+}
+
 // inCurrentFolder makes a relative folder absolute from the folder the command
 // runs in, which tests can set.
 func (a *app) inCurrentFolder(dir string) (string, error) {
@@ -212,7 +230,7 @@ func (a *app) nicknameAsker(ctx context.Context, skip bool) projects.Asker {
 	}
 	return func(name string) (string, error) {
 		fmt.Fprintf(a.Stderr, "The project will be listed as %q. Add a nickname? (Enter to keep the name): ", name)
-		line, ok := a.readLine()
+		line, ok := a.readLine(ctx)
 		if err := ctx.Err(); err != nil { // Ctrl-C: the owner is cancelling, not answering
 			return "", err
 		}

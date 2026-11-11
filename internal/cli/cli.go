@@ -68,18 +68,36 @@ type app struct {
 
 // readLine reads one line from standard input, without its line ending. ok is
 // false when there is no input or it has ended.
-func (a *app) readLine() (line string, ok bool) {
+//
+// It stops waiting as soon as ctx is cancelled (Ctrl-C). A person at a terminal
+// who presses Ctrl-C does not type a line, so waiting for one would leave the
+// program stuck until they pressed Enter. The read itself cannot be taken back,
+// so it is left to end with the program, which is about to stop.
+func (a *app) readLine(ctx context.Context) (line string, ok bool) {
 	if a.Stdin == nil {
 		return "", false
 	}
 	if a.in == nil {
 		a.in = bufio.NewReader(a.Stdin)
 	}
-	line, err := a.in.ReadString('\n')
-	if err != nil && line == "" {
-		return "", false
+	type result struct {
+		line string
+		err  error
 	}
-	return strings.TrimRight(line, "\r\n"), true
+	got := make(chan result, 1)
+	go func() {
+		l, err := a.in.ReadString('\n')
+		got <- result{l, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", false
+	case r := <-got:
+		if r.err != nil && r.line == "" {
+			return "", false
+		}
+		return strings.TrimRight(r.line, "\r\n"), true
+	}
 }
 
 // Main runs one command and returns its exit code.

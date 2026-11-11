@@ -2,56 +2,316 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/gui-brant/cli-test-manager/internal/core"
 	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/projects"
 )
 
-// projectScreen is what opens when a project is chosen. For now it shows what
-// the project's manifest declares; the feature, environment and action screens
-// that follow are the next step of the menu.
-type projectScreen struct {
-	entry  projects.Entry
-	loaded *manifestfile.Loaded
+// selection is what the owner has chosen so far on the way to an action: the
+// project, then a feature, then an environment (entries 37 and 38).
+type selection struct {
+	entry   projects.Entry
+	loaded  *manifestfile.Loaded
+	feature string
+	env     string
 }
 
-func newProjectScreen(e projects.Entry, l *manifestfile.Loaded) *projectScreen {
-	return &projectScreen{entry: e, loaded: l}
+func (s selection) manifest() *core.Manifest { return s.loaded.Manifest }
+
+// breadcrumb is the path chosen so far, as a line at the top of each screen.
+func (s selection) breadcrumb() string {
+	parts := []string{s.entry.Display()}
+	if s.feature != "" {
+		parts = append(parts, s.feature)
+	}
+	if s.env != "" {
+		parts = append(parts, s.env)
+	}
+	return strings.Join(parts, " › ")
 }
 
-func (p *projectScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
-		switch key.String() {
-		case "esc":
-			return p, nav{pop: true}, nil
-		case "q":
-			return p, nav{quit: true}, nil
+// environments are the project's environment names, in order.
+func (s selection) environments() []string {
+	names := make([]string, 0, len(s.manifest().Environments))
+	for name := range s.manifest().Environments {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// testsOf counts the tests of a feature and, when env is not empty, how many of
+// them can run in that environment (their runner allows it).
+func (s selection) testsOf(feature, env string) (total, inEnv int) {
+	m := s.manifest()
+	for _, t := range m.Tests {
+		if t.Feature != feature {
+			continue
+		}
+		total++
+		for _, e := range m.Runners[t.Runner].Environments {
+			if env == "" || e == env {
+				inEnv++
+				break
+			}
 		}
 	}
-	return p, nav{}, nil
+	return total, inEnv
 }
 
-func (p *projectScreen) view(width, height int) string {
-	m := p.loaded.Manifest
-	envs := make([]string, 0, len(m.Environments))
-	for name := range m.Environments {
-		envs = append(envs, name)
+func noun(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
 	}
-	sort.Strings(envs)
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", p.entry.Display())
-	fmt.Fprintf(&b, "Project       %s\n", m.Project)
-	fmt.Fprintf(&b, "Folder        %s\n", p.entry.Path)
-	fmt.Fprintf(&b, "Features      %s\n", strings.Join(m.Features, ", "))
-	fmt.Fprintf(&b, "Environments  %s\n", strings.Join(envs, ", "))
-	fmt.Fprintf(&b, "Tests         %d\n\n", len(m.Tests))
-	b.WriteString("The screens for features, environments and actions come next.")
-	return wrap(b.String(), width)
+	return fmt.Sprintf("%d %s", n, many)
 }
 
-func (p *projectScreen) keys() string { return "esc back · q quit" }
+// ---- a list of choices, shared by the three screens ----
+
+type pickItem struct{ label, hint string }
+
+type pickListItem struct{ pickItem }
+
+func (p pickListItem) FilterValue() string { return p.label }
+
+type pickDelegate struct{ labelWidth int }
+
+func (pickDelegate) Height() int                               { return 1 }
+func (pickDelegate) Spacing() int                              { return 0 }
+func (pickDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d pickDelegate) Render(w io.Writer, m list.Model, index int, it list.Item) {
+	p := it.(pickListItem)
+	cursor := "  "
+	if index == m.Index() {
+		cursor = "> "
+	}
+	line := fmt.Sprintf("%s%-*s   %s", cursor, d.labelWidth, p.label, p.hint)
+	fmt.Fprint(w, clip(line, m.Width()))
+}
+
+type picker struct {
+	list  list.Model
+	items []pickItem
+}
+
+func newPicker(items []pickItem) *picker {
+	width := 0
+	li := make([]list.Item, len(items))
+	for i, it := range items {
+		li[i] = pickListItem{it}
+		width = max(width, len([]rune(it.label)))
+	}
+	l := list.New(li, pickDelegate{labelWidth: width}, 80, 10)
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+	l.SetFilteringEnabled(false)
+	l.SetShowPagination(false)
+	return &picker{list: l, items: items}
+}
+
+// at is the index of the choice under the cursor, or -1 when there are none.
+func (p *picker) at() int {
+	if len(p.items) == 0 {
+		return -1
+	}
+	return p.list.Index()
+}
+
+func (p *picker) update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	p.list, cmd = p.list.Update(msg)
+	return cmd
+}
+
+func (p *picker) view(width, rows int) string {
+	if rows < 1 {
+		rows = 1
+	}
+	p.list.SetSize(width, rows)
+	return p.list.View()
+}
+
+// layout draws a screen's breadcrumb, its question, the choices and a status.
+func layout(width, height int, crumb, question string, p *picker, status string) string {
+	var b strings.Builder
+	b.WriteString(clip(crumb, width))
+	b.WriteString("\n")
+	b.WriteString(clip(question, width))
+	b.WriteString("\n\n")
+	// The breadcrumb, the question, a blank line, a blank line and the status.
+	b.WriteString(p.view(width, height-5))
+	b.WriteString("\n\n")
+	if status != "" {
+		b.WriteString(wrap(status, width))
+	}
+	return b.String()
+}
+
+// commonKeys handles the keys every choice screen shares. handled is false for
+// any other key, which the caller then passes to the list.
+func commonKeys(msg tea.Msg) (n nav, handled bool) {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return nav{}, false
+	}
+	switch key.String() {
+	case "esc":
+		return nav{pop: true}, true
+	case "q":
+		return nav{quit: true}, true
+	}
+	return nav{}, false
+}
+
+// ---- 2: features ----
+
+// featureScreen lists the project's features. Choosing one goes on to the
+// environments, or straight to the actions when the project has only one
+// environment, since there is nothing to choose (entry 37).
+type featureScreen struct {
+	sel   selection
+	names []string
+	pick  *picker
+}
+
+func newFeatureScreen(e projects.Entry, l *manifestfile.Loaded) *featureScreen {
+	s := &featureScreen{sel: selection{entry: e, loaded: l}}
+	features := append([]string(nil), l.Manifest.Features...)
+	// Tests that belong to no feature are in "general", which the manifest does
+	// not have to list; without a row for it they could not be reached.
+	if !slices.Contains(features, core.GeneralFeature) {
+		if total, _ := s.sel.testsOf(core.GeneralFeature, ""); total > 0 {
+			features = append(features, core.GeneralFeature)
+		}
+	}
+	var items []pickItem
+	for _, f := range features {
+		total, _ := s.sel.testsOf(f, "")
+		s.names = append(s.names, f)
+		items = append(items, pickItem{label: f, hint: noun(total, "test", "tests")})
+	}
+	s.pick = newPicker(items)
+	return s
+}
+
+func (s *featureScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
+	if n, ok := commonKeys(msg); ok {
+		return s, n, nil
+	}
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "enter" {
+		i := s.pick.at()
+		if i < 0 {
+			return s, nav{}, nil
+		}
+		next := s.sel
+		next.feature = s.names[i]
+		envs := next.environments()
+		if len(envs) == 1 {
+			next.env = envs[0]
+			return s, nav{push: newActionScreen(next)}, nil
+		}
+		return s, nav{push: newEnvScreen(next)}, nil
+	}
+	return s, nav{}, s.pick.update(msg)
+}
+
+func (s *featureScreen) view(width, height int) string {
+	return layout(width, height, s.sel.breadcrumb(), "Choose a feature", s.pick, "")
+}
+
+func (s *featureScreen) keys() string { return "↑/↓ move · enter choose · esc back · q quit" }
+
+// ---- 3: environments ----
+
+type envScreen struct {
+	sel   selection
+	names []string
+	pick  *picker
+}
+
+func newEnvScreen(sel selection) *envScreen {
+	s := &envScreen{sel: sel, names: sel.environments()}
+	total, _ := sel.testsOf(sel.feature, "")
+	var items []pickItem
+	for _, env := range s.names {
+		_, inEnv := sel.testsOf(sel.feature, env)
+		items = append(items, pickItem{label: env, hint: fmt.Sprintf("%d of %s can run here", inEnv, noun(total, "test", "tests"))})
+	}
+	s.pick = newPicker(items)
+	return s
+}
+
+func (s *envScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
+	if n, ok := commonKeys(msg); ok {
+		return s, n, nil
+	}
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "enter" {
+		i := s.pick.at()
+		if i < 0 {
+			return s, nav{}, nil
+		}
+		next := s.sel
+		next.env = s.names[i]
+		return s, nav{push: newActionScreen(next)}, nil
+	}
+	return s, nav{}, s.pick.update(msg)
+}
+
+func (s *envScreen) view(width, height int) string {
+	return layout(width, height, s.sel.breadcrumb(), "Choose an environment", s.pick, "")
+}
+
+func (s *envScreen) keys() string { return "↑/↓ move · enter choose · esc back · q quit" }
+
+// ---- 4: actions ----
+
+// actionScreen lists what can be done with the chosen feature in the chosen
+// environment. The actions themselves are built in later steps of the menu.
+type actionScreen struct {
+	sel    selection
+	pick   *picker
+	status string
+}
+
+func newActionScreen(sel selection) *actionScreen {
+	total, inEnv := sel.testsOf(sel.feature, sel.env)
+	items := []pickItem{
+		{"Run history", "the runs of this project, newest first"},
+		{"Counts", "how each test has done"},
+		{"Tests", fmt.Sprintf("the %s of %s, and their code", noun(total, "test", "tests"), sel.feature)},
+		{"Run all", fmt.Sprintf("%s in %s, asks first", noun(inEnv, "test", "tests"), sel.env)},
+		{"Run several", "choose which of them to run"},
+	}
+	return &actionScreen{sel: sel, pick: newPicker(items)}
+}
+
+func (s *actionScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
+	if n, ok := commonKeys(msg); ok {
+		return s, n, nil
+	}
+	if key, ok := msg.(tea.KeyMsg); ok {
+		if key.String() == "enter" {
+			if i := s.pick.at(); i >= 0 {
+				s.status = s.pick.items[i].label + " is built in a later step of the menu."
+			}
+			return s, nav{}, nil
+		}
+		s.status = ""
+	}
+	return s, nav{}, s.pick.update(msg)
+}
+
+func (s *actionScreen) view(width, height int) string {
+	return layout(width, height, s.sel.breadcrumb(), "Choose an action", s.pick, s.status)
+}
+
+func (s *actionScreen) keys() string { return "↑/↓ move · enter choose · esc back · q quit" }

@@ -147,8 +147,8 @@ func TestEnterOpensTheProjectAndEscGoesBackToTheSameRow(t *testing.T) {
 	if len(m.stack) != 2 {
 		t.Fatalf("stack has %d screens; want 2", len(m.stack))
 	}
-	mustContain(t, "project screen", m.View(), "bw", "Project       se3316-lab3-birdwatching", "Folder        "+dirs[1],
-		"Features      birds, security", "Environments  deployed, local", "Tests         2", "esc back")
+	_ = dirs
+	mustContain(t, "features screen", m.View(), "bw", "Choose a feature", "birds", "1 test", "security", "esc back")
 
 	press(m, "esc")
 	if len(m.stack) != 1 {
@@ -323,9 +323,9 @@ func TestTheMenuRunsAsAProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	fm := final.(*Model)
-	top, ok := fm.stack[len(fm.stack)-1].(*projectScreen)
-	if !ok || top.entry.Name != "two" {
-		t.Errorf("the program ended on %T; want the second project's screen", fm.stack[len(fm.stack)-1])
+	top, ok := fm.stack[len(fm.stack)-1].(*featureScreen)
+	if !ok || top.sel.entry.Name != "two" {
+		t.Errorf("the program ended on %T; want the second project's feature screen", fm.stack[len(fm.stack)-1])
 	}
 }
 

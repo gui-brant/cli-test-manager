@@ -11,6 +11,7 @@ import (
 	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/query"
 	"github.com/gui-brant/cli-test-manager/internal/store/sqlite"
+	"github.com/gui-brant/cli-test-manager/internal/view"
 )
 
 func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string) int {
@@ -112,7 +113,7 @@ Flags:
 			reason += fmt.Sprintf("; details: tester history %d", r.ID)
 		}
 		fmt.Fprintf(t, "%d\t%s\t%s\t%s\t%s\t%d/%d\t%s\t%s\n",
-			r.ID, a.when(r.StartedAt), r.Source, dash(r.Environment), resultWord(r.State, r.Outcome),
+			r.ID, a.when(r.StartedAt), r.Source, dash(r.Environment), view.ResultWord(r.State, r.Outcome),
 			r.Failed, r.Total, dash(strings.Join(r.Features, ",")), reason)
 	}
 	t.Flush()
@@ -135,49 +136,23 @@ func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *s
 		return a.errorf("%v", err)
 	}
 
-	run := d.Run
-	fmt.Fprintf(a.Stdout, "Run %d  %s\n", id, resultWord(run.State, d.Verdict.Outcome))
-	if d.Verdict.Reason != "" {
-		fmt.Fprintf(a.Stdout, "  reason       %s\n", d.Verdict.Reason)
+	// The words are built by the view package, which the menu shares; this command
+	// puts them in order and says how to see the detail.
+	parts := view.Build(d, id, a.loc)
+	fmt.Fprintln(a.Stdout, parts.Header)
+	fmt.Fprintln(a.Stdout)
+	fmt.Fprintln(a.Stdout, parts.Results)
+	if parts.Diagnostic != "" {
+		fmt.Fprintln(a.Stdout)
+		fmt.Fprintln(a.Stdout, parts.Diagnostic)
 	}
-	fmt.Fprintf(a.Stdout, "  when         %s to %s\n", a.when(run.StartedAt), a.when(run.FinishedAt))
-	fmt.Fprintf(a.Stdout, "  source       %s, environment %s\n", run.Source, dash(run.Environment))
-	if run.ExitCode != 0 {
-		fmt.Fprintf(a.Stdout, "  exit code    %d\n", run.ExitCode)
-	}
-	if run.ExternalID != "" {
-		fmt.Fprintf(a.Stdout, "  remote run   %s, attempt %d, commit %s\n", run.ExternalID, run.Attempt, dash(run.CommitSHA))
-	}
-
-	fmt.Fprintln(a.Stdout, "\nResults:")
-	if len(d.Results) == 0 {
-		fmt.Fprintln(a.Stdout, "  (none)")
-	}
-	width := 0
-	for _, r := range d.Results {
-		width = max(width, len(dash(r.TestID)))
-	}
-	for _, r := range d.Results {
-		num := "-"
-		if r.Number > 0 {
-			num = fmt.Sprintf("#%d", r.Number)
-		}
-		fmt.Fprintf(a.Stdout, "  %-4s %-5s %-*s  %s\n", num, strings.ToUpper(string(r.Status)), width, dash(r.TestID), r.Name)
-		if strings.TrimSpace(r.Message) != "" {
-			fmt.Fprintln(a.Stdout, indent(strings.TrimSpace(r.Message), "        "))
-		}
-	}
-	if strings.TrimSpace(run.Diagnostic) != "" {
-		fmt.Fprintln(a.Stdout, "\nDiagnostic:")
-		fmt.Fprintln(a.Stdout, indent(run.Diagnostic, "  "))
-	}
-	if strings.TrimSpace(run.Detail) != "" {
+	if parts.HasDetail() {
+		fmt.Fprintln(a.Stdout)
 		if detail {
-			fmt.Fprintln(a.Stdout, "\nTool detail:")
-			fmt.Fprintln(a.Stdout, indent(run.Detail, "  "))
+			fmt.Fprintln(a.Stdout, parts.Detail)
 		} else {
 			// Say that it exists and how to see it, so nobody has to guess.
-			fmt.Fprintf(a.Stdout, "\nThe test tool gave more detail on the failed results (stack traces, error objects).\nShow it with: tester history %d --detail\n", id)
+			fmt.Fprintf(a.Stdout, "%s\nShow it with: tester history %d --detail\n", view.DetailHint, id)
 		}
 	}
 	return ExitOK

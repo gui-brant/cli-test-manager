@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,8 +11,10 @@ import (
 
 	"github.com/gui-brant/cli-test-manager/internal/cli"
 	"github.com/gui-brant/cli-test-manager/internal/creds/env"
+	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/projects"
 	"github.com/gui-brant/cli-test-manager/internal/runner"
+	"github.com/gui-brant/cli-test-manager/internal/tui"
 )
 
 func main() {
@@ -36,6 +39,14 @@ func main() {
 		IsTerminal: isTerminal(os.Stdin),
 
 		ProjectsFile: projectsFile,
+		// The menu is the only place the screen framework is used.
+		Menu: func(ctx context.Context, in io.Reader, out io.Writer) error {
+			return tui.Run(ctx, in, out, tui.Deps{
+				Projects: &projects.Service{File: projectsFile},
+				Load:     manifestfile.Load,
+				Loc:      time.Local,
+			})
+		},
 	})
 
 	stop()

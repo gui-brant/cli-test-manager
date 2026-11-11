@@ -55,6 +55,10 @@ type Deps struct {
 	// is not available. The real program sets it to a file in the user's config
 	// folder; tests set it to a temporary file, never the real one.
 	ProjectsFile string
+	// Menu opens the interactive menu on the terminal and returns when the owner
+	// leaves it. The real program sets it; it is a hook so that this package
+	// holds no screen code.
+	Menu func(ctx context.Context, in io.Reader, out io.Writer) error
 }
 
 type app struct {
@@ -136,6 +140,8 @@ func Main(ctx context.Context, args []string, d Deps) int {
 		return a.cmdCheck(manifestPath, rest)
 	case "projects":
 		return a.cmdProjects(ctx, rest)
+	case "menu":
+		return a.cmdMenu(ctx, rest)
 	}
 	fmt.Fprintf(a.Stderr, "tester: unknown command %q\n\n", cmd)
 	a.usage(a.Stderr)
@@ -183,6 +189,7 @@ Commands:
              projects add [--name nickname] [folder]
              projects rename <name or folder> <nickname>
              projects remove <name or folder>
+  menu     open the interactive menu, to browse your projects (needs a terminal)
   help     show this text
 
 A project is added to the list of projects when you use run or history in it; at

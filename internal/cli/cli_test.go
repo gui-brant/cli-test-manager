@@ -661,6 +661,26 @@ func TestFindingTheManifest(t *testing.T) {
 	}
 }
 
+// --manifest takes the manifest file, or the project folder that holds it. A
+// folder with no manifest in it is a clear error that names the file looked for.
+func TestManifestOptionAcceptsAFolder(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.cwd = t.TempDir() // nowhere near the project
+
+	if code := p.do("--manifest", p.root, "check"); code != ExitOK {
+		t.Errorf("--manifest <folder>: exit %d; %s %s", code, p.stdout(), p.stderr())
+	}
+	if code := p.do("--manifest", filepath.Join(p.root, "test-manifest.yaml"), "check"); code != ExitOK {
+		t.Errorf("--manifest <file>: exit %d", code)
+	}
+
+	empty := t.TempDir()
+	if code := p.do("--manifest", empty, "check"); code != ExitError {
+		t.Errorf("a folder with no manifest: exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), "test-manifest.yaml")
+}
+
 func TestUsageAndBadRequests(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 

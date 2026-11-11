@@ -14,6 +14,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -176,6 +177,11 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 // test-manifest.yaml at or above the current folder.
 func (a *app) findManifest(manifestPath string) (string, error) {
 	if manifestPath != "" {
+		// A project folder is accepted as well as the manifest file itself, as
+		// most tools accept a folder: the manifest is the file inside it.
+		if info, err := os.Stat(manifestPath); err == nil && info.IsDir() {
+			return filepath.Join(manifestPath, manifestfile.FileName), nil
+		}
 		return manifestPath, nil
 	}
 	wd, err := a.Getwd()

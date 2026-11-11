@@ -22,6 +22,25 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	offset := fs.Int("offset", 0, "skip this many runs")
 	detail := fs.Bool("detail", false, "with a run number: also show the test tool's own detail on the failed results "+
 		"(stack traces, error objects). It is long and mostly useful to whoever writes the tests, so it is hidden unless asked for")
+	// "tester history -h" explains what a run's view is made of; the general help
+	// does not repeat it.
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), `Usage: tester history [flags]
+       tester history <run number> [--detail]
+
+With no run number it lists runs, newest first. With one it shows that run in full.
+
+What "history <run number>" shows, in order:
+  Results       every result; a failed one has its short message under it
+  Diagnostic    what the commands themselves printed when one crashed, timed out
+                or exited with an error (only when there is something to show)
+  Tool detail   only with --detail: the test tool's own stack traces and error
+                objects for the failed results
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
 	if code, stop := a.parseFlags(fs, args, 100); stop {
 		return code
 	}

@@ -134,20 +134,6 @@ Commands:
   check    check the manifest, and that every test file exists
   help     show this text
 
-What "history <run number>" shows, in order:
-  Results       every result; a failed one has its short message under it
-  Diagnostic    what the commands themselves printed when one crashed, timed out
-                or exited with an error (only when there is something to show)
-  Tool detail   only with --detail: the test tool's own stack traces and error
-                objects for the failed results
-
-What "history <run number>" shows, in order:
-  Results       every result; a failed one has its short message under it
-  Diagnostic    what the commands themselves printed when one crashed, timed out
-                or exited with an error (only when there is something to show)
-  Tool detail   only with --detail: the test tool's own stack traces and error
-                objects for the failed results
-
 The manifest, test-manifest.yaml, is looked for in the current folder and
 the folders above it, unless --manifest names it.
 

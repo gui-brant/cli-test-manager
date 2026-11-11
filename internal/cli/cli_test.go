@@ -548,11 +548,21 @@ func TestHelpExplainsWhatDetailIsFor(t *testing.T) {
 		"history <run number> [--detail]",
 		"--detail also show the test tool's own detail on the failed results",
 		"stack traces, error objects",
-		"hidden unless you ask",
-		"Tool detail only with --detail")
+		"hidden unless you ask")
+	// The list of what a run's view is made of belongs to "history -h" only.
+	if strings.Contains(p.stdout(), "shows, in order") {
+		t.Errorf("the general help repeats what history shows:\n%s", p.stdout())
+	}
 
 	p.do("history", "-h")
-	contains(t, "history -h", p.stderr(), "-detail", "stack traces, error objects", "hidden unless asked for")
+	contains(t, "history -h", p.stderr(),
+		`What "history <run number>" shows, in order:`,
+		"Results every result", "Diagnostic what the commands themselves printed",
+		"Tool detail only with --detail",
+		"-detail", "stack traces, error objects", "hidden unless asked for")
+	if n := strings.Count(p.stderr(), "shows, in order"); n != 1 {
+		t.Errorf("history -h explains what a run shows %d times; want once", n)
+	}
 }
 
 func TestNoHistoryYet(t *testing.T) {

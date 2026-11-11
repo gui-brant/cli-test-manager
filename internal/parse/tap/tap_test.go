@@ -156,6 +156,25 @@ func TestParsePlanProblems(t *testing.T) {
 	}
 }
 
+func TestOnlyTheParsersOwnFindingsAreSynthetic(t *testing.T) {
+	// Results the tool printed are never synthetic; the parser's findings about
+	// a broken stream always are.
+	items := mustParse(t, "1..3\nok 1 - a\nnot ok 2 - b\n")
+	if len(items) != 3 {
+		t.Fatalf("got %d items %v; want 2 results and a plan finding", len(items), names(items))
+	}
+	for i, want := range []bool{false, false, true} {
+		if items[i].Synthetic != want {
+			t.Errorf("item %d (%q): Synthetic = %v; want %v", i, items[i].Result.Name, items[i].Synthetic, want)
+		}
+	}
+
+	items = mustParse(t, "1..5\nok 1 - a\nBail out! database is down\n")
+	if len(items) != 2 || items[0].Synthetic || !items[1].Synthetic {
+		t.Errorf("bail-out: %+v; want the result real and the bail-out finding synthetic", items)
+	}
+}
+
 func TestParseTwoPlansInOneStream(t *testing.T) {
 	// Two files in one stream: each has its own plan, each is checked alone.
 	items := mustParse(t, "1..2\nok 1 - a\nok 2 - b\n1..1\nnot ok 1 - c\n")

@@ -180,5 +180,8 @@ func (p *parser) closeSection() {
 }
 
 func (p *parser) addError(name, msg string) {
-	p.items = append(p.items, parse.Item{Result: core.Result{Name: name, Status: core.StatusError, Message: msg}})
+	p.items = append(p.items, parse.Item{
+		Result:    core.Result{Name: name, Status: core.StatusError, Message: msg},
+		Synthetic: true, // the parser's own finding about the stream, not a test's result
+	})
 }

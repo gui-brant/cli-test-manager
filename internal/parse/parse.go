@@ -19,6 +19,11 @@ type Item struct {
 	// Result is the outcome. TestID and Feature are left empty: matching
 	// results to tests is not the parser's job.
 	Result core.Result
+	// Synthetic is true for a result the parser made up about a broken stream
+	// (a plan that does not match, a bail-out), as opposed to one the test tool
+	// printed. It says the stream is wrong, not why: the cause is usually the
+	// command's exit code or its standard error.
+	Synthetic bool
 }
 
 // MaxMessageBytes caps the message of one result, so a single noisy failure

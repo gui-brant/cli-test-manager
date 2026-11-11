@@ -10,6 +10,7 @@ import (
 
 	"github.com/gui-brant/cli-test-manager/internal/cli"
 	"github.com/gui-brant/cli-test-manager/internal/creds/env"
+	"github.com/gui-brant/cli-test-manager/internal/projects"
 	"github.com/gui-brant/cli-test-manager/internal/runner"
 )
 
@@ -17,6 +18,10 @@ func main() {
 	// Ctrl-C or a terminate signal cancels the run: the command being run is
 	// stopped, and the run is discarded.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	// The list of projects lives in the user's config folder. A user with none
+	// simply has no list: nothing is added to it and `projects` says so.
+	projectsFile, _ := projects.DefaultFile()
 
 	code := cli.Main(ctx, os.Args[1:], cli.Deps{
 		Stdin:      os.Stdin,
@@ -29,6 +34,8 @@ func main() {
 		Runner:     runner.New(),
 		Creds:      env.New(),
 		IsTerminal: isTerminal(os.Stdin),
+
+		ProjectsFile: projectsFile,
 	})
 
 	stop()

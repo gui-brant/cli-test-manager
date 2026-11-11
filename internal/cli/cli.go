@@ -49,6 +49,11 @@ type Deps struct {
 	// IsTerminal says whether standard input is a terminal. Only then does a
 	// run of every test ask for confirmation.
 	IsTerminal bool
+	// ProjectsFile is the path of the list of projects the program knows about.
+	// Empty means no list is kept: nothing is added to it and `projects` says it
+	// is not available. The real program sets it to a file in the user's config
+	// folder; tests set it to a temporary file, never the real one.
+	ProjectsFile string
 }
 
 type app struct {
@@ -90,6 +95,8 @@ func Main(ctx context.Context, args []string, d Deps) int {
 		return a.cmdCounts(ctx, manifestPath, rest)
 	case "check":
 		return a.cmdCheck(manifestPath, rest)
+	case "projects":
+		return a.cmdProjects(rest)
 	}
 	fmt.Fprintf(a.Stderr, "tester: unknown command %q\n\n", cmd)
 	a.usage(a.Stderr)
@@ -132,7 +139,13 @@ Commands:
   counts   show how each test has done
              --env NAME  --feature NAME  --since DATE
   check    check the manifest, and that every test file exists
+  projects list, add or forget the projects the program knows about
+             projects list
+             projects add [folder]
+             projects remove <name or folder>
   help     show this text
+
+A project is added to the list of projects when you use run or history in it.
 
 The manifest, test-manifest.yaml, is looked for in the current folder and
 the folders above it, unless --manifest names it.

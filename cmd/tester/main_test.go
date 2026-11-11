@@ -86,9 +86,14 @@ tests:
 		}
 	}
 
+	// The program keeps a list of projects in the user's config folder. Point it
+	// at a temporary one so the test never writes to the real one.
+	config := t.TempDir()
+
 	run := func(args ...string) (string, int) {
 		cmd := exec.Command(bin, args...)
 		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+config)
 		out, err := cmd.CombinedOutput()
 		code := 0
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -116,5 +121,16 @@ tests:
 	}
 	if out, code := run("counts"); code != 0 || !strings.Contains(out, "hello") {
 		t.Errorf("counts: exit %d\n%s", code, out)
+	}
+
+	// `run` and `history` remembered the project, in the temporary config folder.
+	if out, code := run("projects", "list"); code != 0 || !strings.Contains(out, "smoke") || !strings.Contains(out, project) {
+		t.Errorf("projects list: exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(config, "tester", "projects.yaml")); err != nil {
+		t.Errorf("the list was not written where XDG_CONFIG_HOME says: %v", err)
+	}
+	if out, code := run("projects", "remove", "smoke"); code != 0 || !strings.Contains(out, "Removed smoke") {
+		t.Errorf("projects remove: exit %d\n%s", code, out)
 	}
 }

@@ -54,6 +54,7 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	if err != nil {
 		return a.errorf("%v", err)
 	}
+	a.remember(loaded) // the request is sound, so this project is being used
 
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked.

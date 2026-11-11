@@ -47,4 +47,7 @@ var migrations = [][]string{
 		`CREATE INDEX result_test ON result (test_id)`,
 		`CREATE INDEX result_feature ON result (feature)`,
 	},
+	{ // version 2: the test tool's own detail, kept apart from the diagnostic
+		`ALTER TABLE run ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
+	},
 }

@@ -91,7 +91,7 @@ func sameRun(t *testing.T, got, want core.Run) {
 	t.Helper()
 	if got.Source != want.Source || got.Environment != want.Environment || got.State != want.State ||
 		got.ExitCode != want.ExitCode || got.ExternalID != want.ExternalID || got.Attempt != want.Attempt ||
-		got.CommitSHA != want.CommitSHA || got.Diagnostic != want.Diagnostic {
+		got.CommitSHA != want.CommitSHA || got.Diagnostic != want.Diagnostic || got.Detail != want.Detail {
 		t.Errorf("run fields differ:\n got  %+v\n want %+v", got, want)
 	}
 	if !got.StartedAt.Equal(want.StartedAt) || !got.FinishedAt.Equal(want.FinishedAt) {
@@ -113,6 +113,7 @@ func testRoundTrip(t *testing.T, s core.Store) {
 		StartedAt: t0, FinishedAt: t0.Add(90*time.Second + 7*time.Nanosecond),
 		ExternalID: "9001", Attempt: 2, CommitSHA: "deadbeef",
 		Diagnostic: "tool: could not connect\nerror: refused",
+		Detail:     "[login-flow] rejects\n  at login.js:10",
 		Results: []core.Result{
 			{TestID: "login-flow", Feature: "accounts", Name: "signs in", Status: core.StatusPass, Duration: 250 * time.Millisecond},
 			{TestID: "login-flow", Feature: "accounts", Name: "rejects ação — 日本語", Status: core.StatusFail, Duration: 1500 * time.Millisecond, Message: "expected 401\ngot 200"},

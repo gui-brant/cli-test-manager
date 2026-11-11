@@ -240,6 +240,50 @@ func TestUpgradeAppliesOnlyTheMissingSteps(t *testing.T) {
 	}
 }
 
+// A history file written by the first schema (before runs had a detail) opens
+// with the real migrations: its run is still there, its detail is empty, and
+// new runs can save a detail.
+func TestAVersion1FileGainsTheDetailColumn(t *testing.T) {
+	old := migrations
+	t.Cleanup(func() { migrations = old })
+
+	path := newPath(t)
+	migrations = old[:1] // the schema as it was
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := formatTime(time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
+	if _, err := s.db.Exec(`INSERT INTO run (source, environment, state, started_at, finished_at, exit_code,
+		external_id, attempt, commit_sha, diagnostic, outcome, reason, total, failed)
+		VALUES ('local', 'local', 'complete', ?, ?, 0, '', 0, '', 'an old diagnostic', 'fail', 'x', 0, 0)`, at, at); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	migrations = old // the program as it is now
+	s = openAt(t, path)
+	if got := pragma(t, s.db, "user_version"); got != len(old) {
+		t.Errorf("version after upgrade = %d; want %d", got, len(old))
+	}
+	run, err := s.GetRun(bg, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Diagnostic != "an old diagnostic" || run.Detail != "" {
+		t.Errorf("old run: diagnostic %q, detail %q; want its diagnostic kept and an empty detail", run.Diagnostic, run.Detail)
+	}
+	fresh := someRun(1)
+	fresh.Detail = "[a] A\n  at a.js:1"
+	id, err := s.SaveRun(bg, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetRun(bg, id); err != nil || got.Detail != fresh.Detail {
+		t.Errorf("new run detail %q, %v; want %q", got.Detail, err, fresh.Detail)
+	}
+}
+
 func TestDeletingARunDeletesItsResults(t *testing.T) {
 	s := openAt(t, newPath(t))
 	id, err := s.SaveRun(bg, someRun(1))

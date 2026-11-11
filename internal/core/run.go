@@ -78,6 +78,11 @@ type Run struct {
 	// when the cause matters most. It must be scrubbed of known secret values
 	// before it is stored. Empty when there is nothing to add.
 	Diagnostic string
+	// Detail is what the test tool itself said about failed results beyond
+	// their short messages: stack traces and error objects. It is kept apart
+	// from Diagnostic because it is long and mostly for the people who write
+	// the tests, so a view shows it only when asked. Scrubbed like Diagnostic.
+	Detail string
 }
 
 // MaxDiagnosticBytes is the most captured output a diagnostic keeps.

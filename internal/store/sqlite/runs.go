@@ -56,13 +56,13 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 		fields := []any{
 			string(run.Source), run.Environment, string(run.State),
 			formatTime(run.StartedAt), formatTime(run.FinishedAt), run.ExitCode,
-			run.ExternalID, run.Attempt, run.CommitSHA, run.Diagnostic,
+			run.ExternalID, run.Attempt, run.CommitSHA, run.Diagnostic, run.Detail,
 			string(verdict.Outcome), verdict.Reason, len(run.Results), failed,
 		}
 		if id != 0 {
 			if _, err := conn.ExecContext(ctx, `UPDATE run SET
 				source = ?, environment = ?, state = ?, started_at = ?, finished_at = ?, exit_code = ?,
-				external_id = ?, attempt = ?, commit_sha = ?, diagnostic = ?,
+				external_id = ?, attempt = ?, commit_sha = ?, diagnostic = ?, detail = ?,
 				outcome = ?, reason = ?, total = ?, failed = ?
 				WHERE id = ?`, append(fields, id)...); err != nil {
 				return err
@@ -73,9 +73,9 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 		} else {
 			res, err := conn.ExecContext(ctx, `INSERT INTO run (
 				source, environment, state, started_at, finished_at, exit_code,
-				external_id, attempt, commit_sha, diagnostic,
+				external_id, attempt, commit_sha, diagnostic, detail,
 				outcome, reason, total, failed)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields...)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields...)
 			if err != nil {
 				return err
 			}
@@ -132,9 +132,9 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 		source, state, started, finished string
 	)
 	err = tx.QueryRowContext(ctx, `SELECT id, source, environment, state, started_at, finished_at, exit_code,
-		external_id, attempt, commit_sha, diagnostic FROM run `+where, args...).
+		external_id, attempt, commit_sha, diagnostic, detail FROM run `+where, args...).
 		Scan(&run.ID, &source, &run.Environment, &state, &started, &finished, &run.ExitCode,
-			&run.ExternalID, &run.Attempt, &run.CommitSHA, &run.Diagnostic)
+			&run.ExternalID, &run.Attempt, &run.CommitSHA, &run.Diagnostic, &run.Detail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Run{}, fmt.Errorf("store: run not found: %w", core.ErrNotFound)
 	}

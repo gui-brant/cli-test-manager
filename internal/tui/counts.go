@@ -59,6 +59,16 @@ func newCountsScreen(sel selection) *countsScreen {
 	return s
 }
 
+// refresh reads the counts again, after runs were pulled, keeping the cursor.
+func (s *countsScreen) refresh() {
+	at := s.pick.at()
+	fresh := newCountsScreen(s.sel)
+	s.pick, s.status = fresh.pick, fresh.status
+	if at > 0 && len(s.pick.items) > 0 {
+		s.pick.list.Select(min(at, len(s.pick.items)-1))
+	}
+}
+
 func (s *countsScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 	if n, ok := commonKeys(msg); ok {
 		return s, n, nil

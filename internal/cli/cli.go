@@ -59,6 +59,10 @@ type Deps struct {
 	// leaves it. The real program sets it; it is a hook so that this package
 	// holds no screen code.
 	Menu func(ctx context.Context, in io.Reader, out io.Writer) error
+	// NewSource makes the source `pull` reads results from, given the service's
+	// token. The real program sets it to the GitHub adapter; a hook, so that
+	// this package knows no service and tests can use a fake.
+	NewSource func(token string) core.ResultSource
 }
 
 type app struct {
@@ -132,6 +136,8 @@ func Main(ctx context.Context, args []string, d Deps) int {
 		return a.cmdRun(ctx, manifestPath, rest)
 	case "history":
 		return a.cmdHistory(ctx, manifestPath, rest)
+	case "pull":
+		return a.cmdPull(ctx, manifestPath, rest)
 	case "tests":
 		return a.cmdTests(manifestPath, rest)
 	case "counts":
@@ -178,6 +184,8 @@ Commands:
                --detail  also show the test tool's own detail on the failed results
                          (stack traces, error objects). It is long and mostly useful
                          to whoever writes the tests, so it is hidden unless you ask.
+  pull     bring in the results of runs a CI service did the work for
+             (the manifest's pull section: repository, workflow, artifact, token name)
   tests    list the tests, or show one test's file
              tests [--feature NAME]
              tests show <id>

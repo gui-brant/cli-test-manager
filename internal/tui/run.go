@@ -91,6 +91,9 @@ func (s *confirmScreen) view(width, height int) string {
 
 func (s *confirmScreen) keys() string { return "y run · any other key goes back" }
 
+// modal: any key answers the question, so the pull key is not taken from it.
+func (s *confirmScreen) modal() bool { return true }
+
 // ---- run several: choose the tests ----
 
 // severalScreen lists the tests of the feature that can run in the environment,
@@ -230,6 +233,9 @@ func newProgressScreen(sel selection, req execute.Request, p execute.Preview) *p
 }
 
 func (p *progressScreen) busy() bool { return p.state != stopped }
+
+// modal: a run in progress takes its keys for itself.
+func (p *progressScreen) modal() bool { return true }
 
 // start begins the run in the background and returns the command that waits for
 // its first report.

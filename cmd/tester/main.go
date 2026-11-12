@@ -17,6 +17,7 @@ import (
 	"github.com/gui-brant/cli-test-manager/internal/manifestfile"
 	"github.com/gui-brant/cli-test-manager/internal/projects"
 	"github.com/gui-brant/cli-test-manager/internal/runner"
+	"github.com/gui-brant/cli-test-manager/internal/source/github"
 	"github.com/gui-brant/cli-test-manager/internal/store/sqlite"
 	"github.com/gui-brant/cli-test-manager/internal/tui"
 )
@@ -43,6 +44,8 @@ func main() {
 		IsTerminal: isTerminal(os.Stdin),
 
 		ProjectsFile: projectsFile,
+		// GitHub is the one service results can be pulled from.
+		NewSource: func(token string) core.ResultSource { return github.New(token) },
 		// The menu is the only place the screen framework is used.
 		Menu: func(ctx context.Context, in io.Reader, out io.Writer) error {
 			return tui.Run(ctx, in, out, tui.Deps{
@@ -56,6 +59,8 @@ func main() {
 				Environ: os.Environ,
 				Now:     time.Now,
 				Save:    func(path string) (core.Store, error) { return sqlite.Open(path) },
+				// Pulling from GitHub, when a project's manifest says to.
+				NewSource: func(token string) core.ResultSource { return github.New(token) },
 			})
 		},
 	})

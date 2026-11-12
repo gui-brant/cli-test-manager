@@ -76,6 +76,16 @@ func newHistoryScreen(sel selection) *historyScreen {
 	return s
 }
 
+// refresh reads the runs again, after runs were pulled, keeping the cursor.
+func (s *historyScreen) refresh() {
+	at := s.pick.at()
+	fresh := newHistoryScreen(s.sel)
+	s.runs, s.pick, s.status = fresh.runs, fresh.pick, fresh.status
+	if at > 0 && len(s.runs) > 0 {
+		s.pick.list.Select(min(at, len(s.runs)-1))
+	}
+}
+
 func (s *historyScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 	if n, ok := commonKeys(msg); ok {
 		return s, n, nil

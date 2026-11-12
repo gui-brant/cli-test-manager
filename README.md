@@ -7,7 +7,7 @@
 - Secrets are passed to the tests from your environment by **name**. The values are scrubbed from everything stored or shown.
 - It starts every command in a few milliseconds, so it is safe to use from a git hook.
 
-Not built yet: pulling results produced elsewhere (for example a GitHub workflow). The manifest has a `pull:` section reserved for it.
+It can also **pull** results a CI service produced (a GitHub Actions workflow that uploads a JUnit file), so local and remote runs sit in one history. Pulling is new and has not yet been tried against a real repository.
 
 ## Build
 
@@ -27,6 +27,7 @@ A project puts a `test-manifest.yaml` at its root. `examples/test-manifest.yaml`
 | `features` | the names tests are grouped under. `general` always exists, for tests that belong to none |
 | `environments` | where tests can run (`local`, `staging`...), each with `vars` (plain values) and `secrets` (**names** only, never values) |
 | `runners` | how to start a kind of test: the command as an argument list with `{files}` (and `{report}` for a result file), the result `format` (`tap` or `junit`), `output` (`stdout` or `file`), the environments it serves, and a `timeout` |
+| `pull` | optional: where results produced elsewhere come from. The GitHub `repo` (`owner/name`), the `workflow`, the `artifact` name, the `environment` those results belong to, `lookback_days` for the first pull, and `token`: the **name** of the environment variable holding a GitHub token that can read the repository's Actions (never listed as an environment secret, so tests never receive it) |
 | `tests` | the tests, in order. The order is the numbering and is append-only, so history stays readable. Each has an `id` that never changes, a `name`, a `feature`, a `runner`, a `file` and an optional `tag` |
 
 The tester looks for the manifest in the current folder and the folders above it, unless `--manifest PATH` names it (a file or a folder).
@@ -40,6 +41,7 @@ The tester looks for the manifest in the current folder and the folders above it
 | `tester run [--env NAME] [--feature NAME] [--test ID ...] [--yes]` | runs tests and saves the run. A run of every test asks "Are you sure?" at a terminal; `--yes` skips it, and a hook (no terminal) is never asked |
 | `tester history [--env] [--feature] [--source] [--limit] [--offset]` | lists runs, newest first |
 | `tester history <n> [--detail]` | shows one run: its results, the diagnostic when a command crashed or timed out, and with `--detail` the test tool's own stack traces |
+| `tester pull` | brings in the results of the workflow's runs that are not in the history yet, stopping at the first run it already has. A run still going is kept as a placeholder and checked again next time; a run whose file expired or is missing is recorded as such. Exit 0 whatever the pulled tests did, 2 if it could not pull |
 | `tester tests [--feature NAME]` | lists the tests with their numbers |
 | `tester tests show <id>` | shows a test's file |
 | `tester counts [--env] [--feature] [--since DATE]` | shows how each test has done |
@@ -74,6 +76,8 @@ The program keeps one small file, `projects.yaml`, in your config folder (`teste
 | Run several | tick tests with space (`a` for all), `Enter` runs the ticked ones |
 | Running | lists tests as they finish. `Esc` or Ctrl-C stops it and saves nothing |
 
+When the open project's manifest has a `pull` section, the menu also pulls (see `tester pull`): when you open the project, and again with `p`. A line under the screen says how the link is doing (`GitHub: connected · pulled 14:05 (2 new runs)`, or why it is not connected). Every two minutes it asks GitHub, with one list call and no downloads, whether there are runs it has not pulled, and shows a `●` beside `p pull` when there are. The Run history and Counts screens read again when a pull brings runs in.
+
 ## How the code is organised
 
 Dependencies point inward: the screens and commands call services, the services call small interfaces, and the interfaces are implemented at the edge.
@@ -87,6 +91,7 @@ Dependencies point inward: the screens and commands call services, the services 
 | `redact`, `creds/env` | scrubbing secrets, and reading them from the environment |
 | `store/sqlite` | the history file |
 | `execute` | preview and run: the logic of a run |
+| `pull`, `source/github` | pulling: the service (what is new, matching results to tests, storing once per run and attempt) and the GitHub adapter behind the `ResultSource` interface |
 | `query` | history, one run, counts, the test list, a test's code |
 | `view` | the text of a run, shared by the command and the menu |
 | `projects` | the list of projects |

@@ -55,6 +55,13 @@ type Deps struct {
 	// Context ends a run in progress when the program is told to stop. Nil means
 	// nothing does.
 	Context context.Context
+
+	// NewSource makes the source results are pulled from, given the service's
+	// token. Nil means the menu does not pull.
+	NewSource func(token string) core.ResultSource
+	// CheckEvery is how often an open project asks the service whether there is
+	// something to pull. Zero means every two minutes.
+	CheckEvery time.Duration
 }
 
 // nav says where a screen wants to go after a key.
@@ -85,6 +92,9 @@ type Model struct {
 	deps          Deps
 	stack         []screen
 	width, height int
+	// remote is the link to the service the open project pulls from, or nil when
+	// no project is open or it has nothing to pull from.
+	remote *remote
 }
 
 // New makes the menu, opened on the project chooser.
@@ -110,6 +120,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if b, ok := m.stack[len(m.stack)-1].(busyScreen); msg.Type == tea.KeyCtrlC && !(ok && b.busy()) {
 			return m, tea.Quit
 		}
+		// The pull key, on every screen of a project that has something to pull
+		// from, except one that takes every key for itself.
+		if msg.String() == "p" && m.remote != nil && !m.modal() {
+			return m, m.startPull(m.remote)
+		}
+	default:
+		if cmd, handled := m.handleRemote(msg); handled {
+			return m, cmd
+		}
 	}
 
 	top := len(m.stack) - 1
@@ -122,20 +141,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stack[top] = n.replace
 	case n.pop && len(m.stack) > 1:
 		m.stack = m.stack[:top]
+		if len(m.stack) == 1 {
+			m.remote = nil // back at the projects: nothing is open
+		}
 	case n.push != nil:
 		m.stack = append(m.stack, n.push)
+		// Opening a project from the chooser starts its link, and pulls.
+		if fs, ok := n.push.(*featureScreen); ok && len(m.stack) == 2 {
+			cmd = tea.Batch(cmd, m.openRemote(fs.sel))
+		}
 	}
 	return m, cmd
 }
 
-// View draws the screen on top of the stack with its key line under it.
+// modal says whether the screen on top takes every key for itself.
+func (m *Model) modal() bool {
+	ms, ok := m.stack[len(m.stack)-1].(modalScreen)
+	return ok && ms.modal()
+}
+
+// View draws the screen on top of the stack with, under it, how the link to the
+// service is doing (when the open project has one) and its key line.
 func (m *Model) View() string {
 	top := m.stack[len(m.stack)-1]
 	height := m.height - 1 // the key line
+	keys := top.keys()
+	footer := ""
+	if m.remote != nil {
+		height-- // the line about the link
+		footer = clip(m.remote.line(m.deps.Loc), m.width) + "\n"
+		if !m.modal() {
+			keys += " · " + m.remote.pullKey()
+		}
+	}
 	if height < 1 {
 		height = 1
 	}
-	return top.view(m.width, height) + "\n" + clip(top.keys(), m.width)
+	return top.view(m.width, height) + "\n" + footer + clip(keys, m.width)
 }
 
 // Run opens the menu on the terminal and returns when the owner leaves it. A

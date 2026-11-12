@@ -50,6 +50,12 @@ func main() {
 				Load:     manifestfile.Load,
 				History:  openHistory,
 				Loc:      time.Local,
+				// The same parts the run command uses.
+				Runner:  runner.New(),
+				Creds:   env.New(),
+				Environ: os.Environ,
+				Now:     time.Now,
+				Save:    func(path string) (core.Store, error) { return sqlite.Open(path) },
 			})
 		},
 	})

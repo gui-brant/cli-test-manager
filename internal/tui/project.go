@@ -119,6 +119,12 @@ func newPicker(items []pickItem) *picker {
 	return &picker{list: l, items: items}
 }
 
+// setLabel changes the label of choice i, keeping the cursor where it is.
+func (p *picker) setLabel(i int, label string) {
+	p.items[i].label = label
+	p.list.SetItem(i, pickListItem{p.items[i]})
+}
+
 // at is the index of the choice under the cursor, or -1 when there are none.
 func (p *picker) at() int {
 	if len(p.items) == 0 {
@@ -322,6 +328,20 @@ func (s *actionScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 				return s, nav{push: newCountsScreen(s.sel)}, nil
 			case s.pick.items[i].label == "Tests":
 				return s, nav{push: newTestsScreen(s.sel)}, nil
+			case s.pick.items[i].label == "Run all":
+				next, err := newRunAllScreen(s.sel)
+				if err != nil {
+					s.status = err.Error()
+					return s, nav{}, nil
+				}
+				return s, nav{push: next}, nil
+			case s.pick.items[i].label == "Run several":
+				next, err := newSeveralScreen(s.sel)
+				if err != nil {
+					s.status = err.Error()
+					return s, nav{}, nil
+				}
+				return s, nav{push: next}, nil
 			default:
 				s.status = s.pick.items[i].label + " is built in a later step of the menu."
 			}

@@ -44,14 +44,30 @@ type Deps struct {
 	History func(path string) (core.Store, error)
 	// Loc is the zone times are shown in. Nil means the local zone.
 	Loc *time.Location
+
+	// What running tests needs: the same parts the run command uses.
+	Runner  core.Runner
+	Creds   core.Credentials
+	Environ func() []string
+	Now     func() time.Time
+	// Save opens the history file for writing, creating it when it is not there.
+	Save func(path string) (core.Store, error)
+	// Context ends a run in progress when the program is told to stop. Nil means
+	// nothing does.
+	Context context.Context
 }
 
 // nav says where a screen wants to go after a key.
 type nav struct {
-	push screen // open this screen on top
-	pop  bool   // go back one screen
-	quit bool   // leave the menu
+	push    screen // open this screen on top
+	replace screen // put this screen where the current one is
+	pop     bool   // go back one screen
+	quit    bool   // leave the menu
 }
+
+// busyScreen is a screen that is doing something Ctrl-C must stop instead of
+// leaving the menu: a run in progress.
+type busyScreen interface{ busy() bool }
 
 // screen is one page of the menu.
 type screen interface {
@@ -89,7 +105,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC { // leaves from any screen: nothing is running yet
+		// Ctrl-C leaves from any screen, except one with a run in progress: that
+		// screen cancels the run and stays.
+		if b, ok := m.stack[len(m.stack)-1].(busyScreen); msg.Type == tea.KeyCtrlC && !(ok && b.busy()) {
 			return m, tea.Quit
 		}
 	}
@@ -100,6 +118,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch {
 	case n.quit:
 		return m, tea.Quit
+	case n.replace != nil:
+		m.stack[top] = n.replace
 	case n.pop && len(m.stack) > 1:
 		m.stack = m.stack[:top]
 	case n.push != nil:
@@ -128,7 +148,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, d Deps) error {
 	// freeze at start. The menu draws no colours that depend on it.
 	lipgloss.SetHasDarkBackground(true)
 
-	p := tea.NewProgram(New(d), tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx))
+	d.Context = ctx
+	// The program's own signal handling (ctx) stops the menu. The library's handler
+	// would race it and could wait forever to hand over a message nobody reads
+	// any more; Ctrl-C in the menu is a key, not a signal, so nothing is lost.
+	p := tea.NewProgram(New(d), tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	if _, err := p.Run(); err != nil {
 		if ctx.Err() != nil && (errors.Is(err, tea.ErrProgramKilled) || errors.Is(err, context.Canceled)) {
 			return ctx.Err()

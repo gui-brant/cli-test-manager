@@ -164,15 +164,18 @@ func TestEscStepsBackOneScreenAtATimeKeepingTheCursor(t *testing.T) {
 	}
 }
 
-func TestActionsAreBuiltLaterAndSayWhenChosen(t *testing.T) {
+// A menu started without a runner (as in these tests) says so instead of failing.
+func TestRunningNeedsARunnerAndSaysSoWhenThereIsNone(t *testing.T) {
 	m := menuFor(t, oneEnvironment)
 	press(m, "enter", "enter")
-	press(m, "down", "down", "down", "enter") // history, counts and tests are built; Run all is not yet
-	mustContain(t, "status", m.View(), "Run all is built in a later step of the menu", "> Run all")
+	press(m, "down", "down", "down", "enter") // Run all
+	mustContain(t, "status", m.View(), "this menu was started without a way to run tests", "> Run all")
 	press(m, "down")
-	if strings.Contains(m.View(), "is built in a later step") {
+	if strings.Contains(m.View(), "without a way to run") {
 		t.Errorf("the note stays after moving:\n%s", m.View())
 	}
+	press(m, "enter") // Run several
+	mustContain(t, "status", m.View(), "this menu was started without a way to run tests")
 	if _, ok := top(m).(*actionScreen); !ok {
 		t.Errorf("choosing an action left the screen: %T", top(m))
 	}

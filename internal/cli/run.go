@@ -81,13 +81,9 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	return a.finishRun(m, rep, err)
 }
 
-// confirmationQuestion says what a run will really do, so the count matches
-// what happens: tests that would be skipped are not counted as run.
+// confirmationQuestion is what the run would really do, as a question.
 func confirmationQuestion(p execute.Preview, env string) string {
-	if n := len(p.Skipped); n > 0 {
-		return fmt.Sprintf("Run %d of %d tests in environment %q (%d skipped)? [y/N] ", len(p.Tests), len(p.Tests)+n, env, n)
-	}
-	return fmt.Sprintf("Run all %d tests in environment %q? [y/N] ", len(p.Tests), env)
+	return p.Describe(env) + "? [y/N] "
 }
 
 // confirm asks a yes/no question. Anything but yes is no. The question goes to

@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
-	"github.com/gui-brant/cli-test-manager/internal/parse"
+	"github.com/gui-brant/cli-test-manager/internal/match"
 	"github.com/gui-brant/cli-test-manager/internal/parse/junit"
 	"github.com/gui-brant/cli-test-manager/internal/redact"
 )
@@ -190,9 +190,9 @@ func (s *Service) Pull(ctx context.Context, req Request) (Report, error) {
 		return rep, err
 	}
 
-	match := matcher(m)
+	find := match.Tests(m)
 	for i := len(found) - 1; i >= 0; i-- {
-		ev, err := s.deal(ctx, spec, found[i].run, found[i].pending, match)
+		ev, err := s.deal(ctx, spec, found[i].run, found[i].pending, find)
 		if err != nil {
 			return rep, err
 		}
@@ -213,7 +213,7 @@ func (s *Service) Pull(ctx context.Context, req Request) (Report, error) {
 }
 
 // deal takes in one run. alreadyPending says a placeholder for it is stored.
-func (s *Service) deal(ctx context.Context, spec core.PullSpec, rr core.RemoteRun, alreadyPending bool, match func(string) (core.TestSpec, bool)) (Event, error) {
+func (s *Service) deal(ctx context.Context, spec core.PullSpec, rr core.RemoteRun, alreadyPending bool, find match.Finder) (Event, error) {
 	base := core.Run{
 		Source: core.SourceRemote, Environment: spec.Environment,
 		StartedAt: rr.CreatedAt, FinishedAt: rr.CreatedAt,
@@ -273,30 +273,7 @@ func (s *Service) deal(ctx context.Context, spec core.PullSpec, rr core.RemoteRu
 	}
 
 	base.State = core.RunComplete
-	base.Results, base.Detail, ev.Unmatched = s.results(items, match)
+	base.Results, base.Detail, ev.Unmatched = match.Results(items, find)
 	ev.Outcome, ev.Results = Stored, len(base.Results)
 	return ev, save(base)
-}
-
-// results turns parsed items into stored results, matching each to a test. It
-// also gathers the tool's own detail on failures, as a local run does.
-func (s *Service) results(items []parse.Item, match func(string) (core.TestSpec, bool)) (results []core.Result, detail string, unmatched int) {
-	var details []string
-	for _, it := range items {
-		r := it.Result
-		if t, ok := match(it.Group); ok {
-			r.TestID, r.Feature = t.ID, t.Feature // the feature is recorded as it is now
-		} else {
-			unmatched++
-		}
-		results = append(results, r)
-		if r.Status.Failed() && strings.TrimSpace(it.Detail) != "" {
-			label := r.TestID
-			if label == "" {
-				label = it.Group
-			}
-			details = append(details, fmt.Sprintf("[%s] %s\n%s", label, r.Name, it.Detail))
-		}
-	}
-	return results, core.TailDiagnostic(strings.TrimRight(strings.Join(details, "\n\n"), "\n")), unmatched
 }

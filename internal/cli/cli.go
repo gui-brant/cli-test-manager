@@ -141,6 +141,8 @@ func Main(ctx context.Context, args []string, d Deps) int {
 		return a.cmdHistory(ctx, manifestPath, rest)
 	case "pull":
 		return a.cmdPull(ctx, manifestPath, rest)
+	case "import":
+		return a.cmdImport(ctx, manifestPath, rest)
 	case "tests":
 		return a.cmdTests(manifestPath, rest)
 	case "counts":
@@ -182,13 +184,17 @@ Commands:
   run      run tests and save the run
              --env NAME  --test ID (repeatable)  --feature NAME  --yes
   history  list runs, or show one run in full
-             history [--env NAME] [--feature NAME] [--source local|remote] [--limit N] [--offset N]
+             history [--env NAME] [--feature NAME] [--source local|remote|import] [--limit N] [--offset N]
              history <run number> [--detail]
                --detail  also show the test tool's own detail on the failed results
                          (stack traces, error objects). It is long and mostly useful
                          to whoever writes the tests, so it is hidden unless you ask.
   pull     bring in the results of runs a CI service did the work for
              (the manifest's pull section: repository, workflow, artifact, token name)
+  import   record a result file that came from outside (a load or network tool)
+             import [--env NAME] [--test ID] [--format junit|tap] [--commit SHA]
+                    [--tool name=version ...] [--when TIME] <file | ->
+             tester import -h explains each flag
   tests    list the tests, or show one test's file
              tests [--feature NAME]
              tests show <id>

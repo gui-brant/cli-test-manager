@@ -93,12 +93,16 @@ func Build(d query.RunDetail, id int64, loc *time.Location) Run {
 	if run.ExitCode != 0 {
 		fmt.Fprintf(&head, "  exit code    %d\n", run.ExitCode)
 	}
-	if run.ExternalID != "" {
+	if run.Source == core.SourceRemote && run.ExternalID != "" {
 		fmt.Fprintf(&head, "  remote run   %s, attempt %d, commit %s\n", run.ExternalID, run.Attempt, Dash(run.CommitSHA))
 	}
 	// A run the tester started or recorded says what it was made against. A
 	// pulled run already shows its commit above, and has no tools of its own.
 	if run.Source != core.SourceRemote {
+		// An imported run's key ends with the hash of the file it came from.
+		if i := strings.LastIndex(run.ExternalID, ":"); run.Source == core.SourceImport && i >= 0 && len(run.ExternalID) >= i+13 {
+			fmt.Fprintf(&head, "  file         sha256 %s\n", run.ExternalID[i+1:i+13])
+		}
 		fmt.Fprintf(&head, "  commit       %s\n", commitText(run))
 		if run.Trigger != "" {
 			fmt.Fprintf(&head, "  started by   %s\n", run.Trigger)

@@ -129,40 +129,8 @@ func get(t *testing.T, st *sqlite.Store, id int64) core.Run {
 	return r
 }
 
-// ---- matching ----
-
-func TestMatchingByIdThenByFilePath(t *testing.T) {
-	match := matcher(testManifest())
-	for group, want := range map[string]string{
-		"login-flow":                              "login-flow",  // the id
-		"tests/http/login_flow.http":              "login-flow",  // the path
-		"ci/work/repo/tests/http/login_flow.http": "login-flow",  // a longer path ends with it
-		"./tests/http/note_create.http":           "note-create", // a leading ./
-		`tests\sql\users_table.sql`:               "users-table", // backslashes
-		"  note-create  ":                         "note-create", // spaces
-	} {
-		got, ok := match(group)
-		if !ok || got.ID != want {
-			t.Errorf("%q matched %q (found %v); want %q", group, got.ID, ok, want)
-		}
-	}
-	for _, group := range []string{"", "stray-suite", "login_flow.http", "other/tests/http/login_flow.http.bak", "users"} {
-		if got, ok := match(group); ok {
-			t.Errorf("%q matched %q; want no test", group, got.ID)
-		}
-	}
-}
-
-func TestTheLongestPathWinsWhenSeveralMatch(t *testing.T) {
-	m := &core.Manifest{Tests: []core.TestSpec{
-		{ID: "short", File: "b.http"},
-		{ID: "long", File: "api/b.http"},
-	}}
-	got, ok := matcher(m)("repo/api/b.http")
-	if !ok || got.ID != "long" {
-		t.Errorf("matched %q; want long", got.ID)
-	}
-}
+// The matching rule itself is tested in the match package, which pulling and
+// importing share.
 
 // ---- pulling ----
 

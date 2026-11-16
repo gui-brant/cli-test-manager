@@ -18,7 +18,7 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	fs := a.flags("history")
 	env := fs.String("env", "", "only runs against this environment")
 	feature := fs.String("feature", "", "only runs that include this feature")
-	source := fs.String("source", "", "only runs from this source: local or remote")
+	source := fs.String("source", "", "only runs from this source: local, remote or import")
 	limit := fs.Int("limit", 0, "show at most this many runs")
 	offset := fs.Int("offset", 0, "skip this many runs")
 	detail := fs.Bool("detail", false, "with a run number: also show the test tool's own detail on the failed results "+
@@ -84,10 +84,10 @@ Flags:
 	var src core.Source
 	switch *source {
 	case "":
-	case "local", "remote":
+	case "local", "remote", "import":
 		src = core.Source(*source)
 	default:
-		return a.errorf("--source must be local or remote, not %q", *source)
+		return a.errorf("--source must be local, remote or import, not %q", *source)
 	}
 	rows, err := (&query.Service{Store: store}).History(ctx, core.RunFilter{
 		Environment: *env, Feature: *feature, Source: src, Limit: *limit, Offset: *offset,

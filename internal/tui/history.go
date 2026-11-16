@@ -60,9 +60,12 @@ func newHistoryScreen(sel selection) *historyScreen {
 	for _, r := range s.runs {
 		hint := fmt.Sprintf("%s  %-4s  %d/%d failed", view.When(sel.deps.Loc, r.StartedAt),
 			view.ResultWord(r.State, r.Outcome), r.Failed, r.Total)
-		// Runs the tester started are the usual case; only a pulled one is marked.
-		if r.Source == core.SourceRemote {
+		// Runs the tester started are the usual case; a pulled or imported one is marked.
+		switch r.Source {
+		case core.SourceRemote:
 			hint += "  (remote)"
+		case core.SourceImport:
+			hint += "  (import)"
 		}
 		if r.Reason != "" {
 			hint += "  " + r.Reason

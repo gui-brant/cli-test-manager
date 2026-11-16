@@ -42,6 +42,7 @@ The tester looks for the manifest in the current folder and the folders above it
 | `tester history [--env] [--feature] [--source] [--limit] [--offset]` | lists runs, newest first |
 | `tester history <n> [--detail]` | shows one run: its results, the diagnostic when a command crashed or timed out, and with `--detail` the test tool's own stack traces |
 | `tester pull` | brings in the results of the workflow's runs that are not in the history yet, stopping at the first run it already has. A run still going is kept as a placeholder and checked again next time; a run whose file expired or is missing is recorded as such. Exit 0 whatever the pulled tests did, 2 if it could not pull |
+| `tester import [--env NAME] [--test ID] [--format junit\|tap] [--commit SHA] [--tool name=version] [--when TIME] <file \| ->` | records a result file that came from outside (the output of a load or network tool the tester never starts) as one run. The environment must allow `import`. Results go to the test their suite or class name points at, or all to `--test`. The same file into the same environment twice is stored once. Exit 0 whatever the results were, 2 if it could not import |
 | `tester tests [--feature NAME]` | lists the tests with their numbers |
 | `tester tests show <id>` | shows a test's file |
 | `tester counts [--env] [--feature] [--since DATE]` | shows how each test has done |

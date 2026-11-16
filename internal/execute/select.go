@@ -12,7 +12,12 @@ import (
 // selectTests picks the tests to run, in manifest order, and the tests left
 // out because their runner does not serve the environment. A test named by id
 // that cannot run there is a problem, not a skip: it was asked for.
-func selectTests(m *core.Manifest, envName string, sel Selection) (run []core.TestSpec, skipped []SkippedTest, problems []string) {
+//
+// restrict, when not nil, keeps only tests of the features it holds, as one more
+// condition beside the ids and the feature. A restriction that leaves nothing is
+// not a mistake (nothing changed in those features), so it returns no tests and
+// no problem.
+func selectTests(m *core.Manifest, envName string, sel Selection, restrict map[string]bool) (run []core.TestSpec, skipped []SkippedTest, problems []string) {
 	explicit := make(map[string]bool)
 	for _, id := range sel.TestIDs {
 		t, ok := m.Test(id)
@@ -39,6 +44,9 @@ func selectTests(m *core.Manifest, envName string, sel Selection) (run []core.Te
 		if sel.Feature != "" && t.Feature != sel.Feature {
 			continue
 		}
+		if restrict != nil && !restrict[t.Feature] {
+			continue
+		}
 		r, ok := m.Runners[t.Runner]
 		if !ok {
 			problems = append(problems, fmt.Sprintf("test %q uses runner %q, which is not defined", t.ID, t.Runner))
@@ -59,6 +67,9 @@ func selectTests(m *core.Manifest, envName string, sel Selection) (run []core.Te
 
 	if len(problems) == 0 && len(run) == 0 {
 		if len(skipped) == 0 {
+			if restrict != nil {
+				return nil, nil, nil
+			}
 			return nil, nil, []string{"no tests match the selection"}
 		}
 		problems = append(problems, fmt.Sprintf("nothing to run: all %d selected tests were skipped", len(skipped)))

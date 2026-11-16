@@ -42,6 +42,17 @@ type Service struct {
 type Selection struct {
 	TestIDs []string // only these tests
 	Feature string   // only tests of this feature
+
+	// UseChanged keeps only the tests of the features that Changed selects: the
+	// files are paths relative to the project, and each selects the features
+	// whose patterns match it (see featuresOfChanges). It is a condition beside
+	// the others, and with no changed files it selects nothing.
+	UseChanged bool
+	Changed    []string
+
+	// Unplayed leaves out every test that has already passed in the environment
+	// with its file as it is now.
+	Unplayed bool
 }
 
 // Request is one run to make.
@@ -109,6 +120,13 @@ type Report struct {
 	// Notes say what could not be recorded about the run (for example that the
 	// project's files could not be listed). They do not mean the run failed.
 	Notes []string
+	// NothingToRun is true when the selection left no test to run (nothing
+	// changed, or everything had already passed). It is not an error: nothing was
+	// started and nothing was saved. Skipped says what was left out and why.
+	NothingToRun bool
+	// Changed says how the changed files mapped to features, when the selection
+	// used them.
+	Changed *ChangedSummary
 }
 
 // plan is everything checked and prepared before the first command starts.
@@ -117,6 +135,7 @@ type plan struct {
 	skipped  []SkippedTest
 	env      []string
 	redactor *redact.Redactor
+	changed  *ChangedSummary
 }
 
 // Run runs the selected tests and saves one run.
@@ -141,6 +160,11 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 	for _, sk := range p.skipped {
 		emit(Event{Kind: EventSkipped, Test: sk.Test, Reason: sk.Reason})
 	}
+	// Nothing changed, or everything selected had already passed: not a failure.
+	// Nothing is started or saved, so no history file is needed either.
+	if len(p.tests) == 0 {
+		return Report{Skipped: p.skipped, NothingToRun: true, Changed: p.changed}, nil
+	}
 
 	run := core.Run{Source: core.SourceLocal, Environment: req.Environment, State: core.RunComplete, StartedAt: s.now()}
 	// What this run is about, recorded before the first test so a test that
@@ -162,7 +186,7 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 
 	cancelled := func(done int, cause error) (Report, error) {
 		run.FinishedAt = s.now()
-		return Report{Run: run, Skipped: p.skipped, Notes: notes},
+		return Report{Run: run, Skipped: p.skipped, Notes: notes, Changed: p.changed},
 			fmt.Errorf("execute: cancelled after %d of %d tests; nothing was saved: %w", done, total, cause)
 	}
 
@@ -216,10 +240,10 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 
 	id, err := s.Store.SaveRun(ctx, run)
 	if err != nil {
-		return Report{Run: run, Skipped: p.skipped, Notes: notes}, fmt.Errorf("execute: saving the run: %w", err)
+		return Report{Run: run, Skipped: p.skipped, Notes: notes, Changed: p.changed}, fmt.Errorf("execute: saving the run: %w", err)
 	}
 	run.ID = id
-	return Report{RunID: id, Run: run, Skipped: p.skipped, Saved: true, Notes: notes}, nil
+	return Report{RunID: id, Run: run, Skipped: p.skipped, Saved: true, Notes: notes, Changed: p.changed}, nil
 }
 
 func (s *Service) now() time.Time {
@@ -246,6 +270,9 @@ type Preview struct {
 	Tests []core.TestSpec
 	// Skipped are the selected tests that would be left out, with the reason.
 	Skipped []SkippedTest
+	// Changed says how the changed files mapped to features, when the selection
+	// used them.
+	Changed *ChangedSummary
 }
 
 // Preview makes every check that Run makes before its first command: the
@@ -257,7 +284,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	return Preview{Tests: p.tests, Skipped: p.skipped}, nil
+	return Preview{Tests: p.tests, Skipped: p.skipped, Changed: p.changed}, nil
 }
 
 // prepare checks the request and builds what the run needs. It starts
@@ -273,15 +300,28 @@ func (s *Service) prepare(ctx context.Context, req Request) (*plan, error) {
 			req.Environment, strings.Join(sortedKeys(m.Environments), ", "))
 	}
 
-	tests, skipped, problems := selectTests(m, req.Environment, req.Select)
+	var restrict map[string]bool
+	var changed *ChangedSummary
+	if req.Select.UseChanged {
+		features, sum := featuresOfChanges(m, req.ManifestFile, req.Select.Changed)
+		restrict, changed = features, &sum
+	}
+	tests, skipped, problems := selectTests(m, req.Environment, req.Select, restrict)
 	if len(problems) > 0 {
 		return nil, problemsError(problems)
+	}
+	if req.Select.Unplayed {
+		remaining, left, err := s.leaveOutPlayed(ctx, req, tests)
+		if err != nil {
+			return nil, problemsError([]string{err.Error()})
+		}
+		tests, skipped = remaining, append(skipped, left...)
 	}
 	env, redactor, problems := s.environment(ctx, m, spec)
 	if len(problems) > 0 {
 		return nil, problemsError(problems)
 	}
-	return &plan{tests: tests, skipped: skipped, env: env, redactor: redactor}, nil
+	return &plan{tests: tests, skipped: skipped, env: env, redactor: redactor, changed: changed}, nil
 }
 
 func problemsError(problems []string) error {

@@ -350,6 +350,9 @@ func (fakeStore) FeatureStats(context.Context, StatsFilter) ([]FeatureStat, erro
 func (fakeStore) GetSnapshotFile(context.Context, int64, string) (SnapshotFile, error) {
 	return SnapshotFile{}, ErrNotFound
 }
+func (fakeStore) PassedTestFiles(context.Context, string) (map[string]map[string]int64, error) {
+	return nil, nil
+}
 func (fakeStore) LatestTestFile(context.Context, string) (int64, SnapshotFile, error) {
 	return 0, SnapshotFile{}, ErrNotFound
 }

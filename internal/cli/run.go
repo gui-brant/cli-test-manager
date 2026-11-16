@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
@@ -25,6 +26,41 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	trigger := fs.String("trigger", string(core.TriggerManual),
 		"what started this run, recorded with it: manual (a person) or hook (a git hook or script)")
+	var changed stringList
+	fs.Var(&changed, "changed", "run only the tests of the features this changed file selects (a path relative to the project); "+
+		"repeat it, or use - to read one path per line from standard input")
+	unplayed := fs.Bool("unplayed", false, "leave out the tests that already passed in this environment with their file as it is now")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), `Usage: tester run [flags]
+
+Runs tests and saves the run. With no restriction it runs every test of the
+environment (and asks first, at a terminal). These flags narrow it, and
+combine: a test runs only if it passes every one.
+
+  --test ID         only this test (repeat for several)
+  --feature NAME    only the tests of this feature
+  --changed PATH    only the tests of the features this changed file selects.
+                    Repeat it, or write --changed - to read one path per line
+                    from standard input (for example from "git diff --name-only").
+                    Paths are relative to the project. A file selects every
+                    feature whose paths match it, and the feature of a test
+                    whose file it is; the manifest selects every feature; a file
+                    that does none of that falls under general. Paths outside the
+                    project are ignored. No changed files selects nothing.
+  --unplayed        leave out every test that already passed in this
+                    environment with its file as it is now (its content, not
+                    its feature's other files). A test that failed, never ran,
+                    or whose file changed is run. Each test left out is listed,
+                    with the run that passed it.
+
+When the narrowing leaves nothing to run (nothing changed, or everything
+already passed) that is a success: it says so, exits 0, and saves nothing. A
+request that cannot run at all (a bad environment, a missing secret) exits 2.
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
 	if code, stop := a.parseFlags(fs, args, 0); stop {
 		return code
 	}
@@ -32,6 +68,11 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	case core.TriggerManual, core.TriggerHook:
 	default:
 		return a.errorf("--trigger must be %q or %q, not %q", core.TriggerManual, core.TriggerHook, *trigger)
+	}
+	useChanged := len(changed) > 0
+	changedFiles, err := a.changedFiles(changed)
+	if err != nil {
+		return a.errorf("%v", err)
 	}
 
 	loaded, err := a.load(manifestPath)
@@ -46,14 +87,30 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 
 	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now, Checkout: a.Checkout, Tree: a.Tree}
 	req := execute.Request{
-		Manifest:     m,
-		Root:         loaded.Root,
-		Environment:  envName,
-		Select:       execute.Selection{TestIDs: ids, Feature: *feature},
+		Manifest:    m,
+		Root:        loaded.Root,
+		Environment: envName,
+		Select: execute.Selection{
+			TestIDs: ids, Feature: *feature,
+			UseChanged: useChanged, Changed: changedFiles, Unplayed: *unplayed,
+		},
 		Trigger:      core.Trigger(*trigger),
 		ManifestRaw:  loaded.Raw,
 		ManifestFile: loaded.File(),
 		Progress:     a.progress,
+	}
+
+	// Which tests have already passed is read from the history, if there is one.
+	// Looking never creates it.
+	var store *sqlite.Store
+	if *unplayed {
+		if store, err = a.openIfExists(loaded); err != nil {
+			return a.errorf("%v", err)
+		}
+		if store != nil {
+			defer store.Close()
+			svc.Store = store
+		}
 	}
 
 	// Check everything first. Nobody should be asked "Are you sure?" about a run
@@ -68,9 +125,16 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 		return ExitCancelled
 	}
 
+	a.printChanged(preview.Changed)
+	if len(preview.Tests) == 0 {
+		a.printNothingToRun(preview, envName)
+		return ExitOK
+	}
+
 	// A run of every test asks first, but only a person at a terminal can
-	// answer: a push hook's input is a pipe, so a hook is never asked.
-	if len(ids) == 0 && *feature == "" && !*yes && a.IsTerminal {
+	// answer: a push hook's input is a pipe, so a hook is never asked. A run that
+	// is narrowed by --test, --feature, --changed or --unplayed is not "every test".
+	if len(ids) == 0 && *feature == "" && !useChanged && !*unplayed && !*yes && a.IsTerminal {
 		if !a.confirm(ctx, confirmationQuestion(preview, envName)) {
 			if ctx.Err() != nil { // Ctrl-C at the question is a cancel, not a "no"
 				fmt.Fprintln(a.Stderr, "\ntester: cancelled; nothing was run")
@@ -80,15 +144,77 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 		}
 	}
 
-	store, err := sqlite.Open(loaded.HistoryPath)
-	if err != nil {
-		return a.errorf("%v", err)
+	if store == nil {
+		if store, err = sqlite.Open(loaded.HistoryPath); err != nil {
+			return a.errorf("%v", err)
+		}
+		defer store.Close()
+		svc.Store = store
 	}
-	defer store.Close()
 
-	svc.Store = store
 	rep, err := svc.Run(ctx, req)
 	return a.finishRun(m, rep, err)
+}
+
+// changedFiles collects the paths given with --changed: each value is a path,
+// except "-", which stands for one path per line on standard input.
+func (a *app) changedFiles(values []string) ([]string, error) {
+	var files []string
+	for _, v := range values {
+		if v != "-" {
+			files = append(files, v)
+			continue
+		}
+		if a.Stdin == nil {
+			return nil, errors.New("--changed - reads paths from standard input, and there is none")
+		}
+		data, err := io.ReadAll(io.LimitReader(a.Stdin, 16<<20))
+		if err != nil {
+			return nil, fmt.Errorf("reading the changed paths from standard input: %w", err)
+		}
+		files = append(files, strings.Split(string(data), "\n")...)
+	}
+	return files, nil
+}
+
+// printChanged says which features the changed files selected, and why, so a
+// run that did less than "everything" shows what it chose.
+func (a *app) printChanged(c *execute.ChangedSummary) {
+	if c == nil {
+		return
+	}
+	line := fmt.Sprintf("Changed files: %d", c.Files)
+	switch {
+	case c.Manifest:
+		line += ", including the manifest, which selects every feature"
+	case c.InNoFeature > 0:
+		line += fmt.Sprintf(" (%d in no feature, so general)", c.InNoFeature)
+	}
+	if len(c.Features) > 0 {
+		line += "; they select: " + strings.Join(c.Features, ", ")
+	} else {
+		line += "; they select no feature"
+	}
+	if c.Outside > 0 {
+		line += fmt.Sprintf(" (%s outside the project, ignored)", plural(c.Outside, "path", "paths"))
+	}
+	fmt.Fprintln(a.Stdout, line)
+}
+
+// printNothingToRun explains a run that has nothing to do, and lists the tests
+// that were left out and why. It is a success: the exit code is 0.
+func (a *app) printNothingToRun(p execute.Preview, env string) {
+	for _, sk := range p.Skipped {
+		fmt.Fprintf(a.Stdout, "skipped  %s  (%s)\n", sk.Test.ID, sk.Reason)
+	}
+	switch {
+	case p.Changed != nil && len(p.Changed.Features) == 0:
+		fmt.Fprintln(a.Stdout, "Nothing to run: no changed file selects a feature.")
+	case len(p.Skipped) > 0:
+		fmt.Fprintf(a.Stdout, "Nothing to run: every selected test has already passed in %s with its current file.\n", env)
+	default:
+		fmt.Fprintln(a.Stdout, "Nothing to run: no test belongs to the features selected.")
+	}
 }
 
 // confirmationQuestion is what the run would really do, as a question.

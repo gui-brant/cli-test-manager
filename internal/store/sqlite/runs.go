@@ -272,6 +272,42 @@ func (s *Store) GetSnapshotFile(ctx context.Context, runID int64, path string) (
 	return f, nil
 }
 
+// PassedTestFiles says which versions of each test's file have passed in the
+// environment, each with the latest run that passed it. Only runs the tester
+// made (they are the ones that have files), and only a test that has a passing
+// check and no failed or errored one in the run.
+func (s *Store) PassedTestFiles(ctx context.Context, environment string) (map[string]map[string]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT f.test_id, f.hash, MAX(f.run_id)
+		FROM run_file f JOIN run r ON r.id = f.run_id
+		WHERE f.role = 'test' AND f.test_id <> '' AND f.hash <> ''
+		  AND r.environment = ? AND r.source = 'local' AND r.state = 'complete'
+		  AND EXISTS (SELECT 1 FROM result x WHERE x.run_id = f.run_id AND x.test_id = f.test_id AND x.status = 'pass')
+		  AND NOT EXISTS (SELECT 1 FROM result x WHERE x.run_id = f.run_id AND x.test_id = f.test_id AND x.status IN ('fail', 'error'))
+		GROUP BY f.test_id, f.hash`, environment)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading what has passed: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]map[string]int64)
+	for rows.Next() {
+		var (
+			testID, hash string
+			runID        int64
+		)
+		if err := rows.Scan(&testID, &hash, &runID); err != nil {
+			return nil, fmt.Errorf("store: reading what has passed: %w", err)
+		}
+		if out[testID] == nil {
+			out[testID] = make(map[string]int64)
+		}
+		out[testID][hash] = runID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: reading what has passed: %w", err)
+	}
+	return out, nil
+}
+
 // LatestTestFile returns the snapshot of a test's file from the most recent run
 // that played the test, or core.ErrNotFound.
 func (s *Store) LatestTestFile(ctx context.Context, testID string) (int64, core.SnapshotFile, error) {

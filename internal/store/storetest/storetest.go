@@ -39,6 +39,7 @@ func Run(t *testing.T, open Open) {
 		{"a test counts once per run, by the worst of its checks", testTestStatsCountOncePerRun},
 		{"feature stats count runs, plays and failed plays", testFeatureStats},
 		{"a run's files are kept as text and read back by path", testSnapshots},
+		{"which versions of a test's file have passed in an environment", testPassedTestFiles},
 		{"large and unusual text round-trips", testLargeAndUnicode},
 		{"a cancelled context is an error", testCancelledContext},
 		{"a closed store is an error", testClosedStore},
@@ -442,6 +443,54 @@ func testTestStats(t *testing.T, s core.Store) {
 	}
 }
 
+// A test's file version has passed in an environment when a run the tester made
+// there played the test with that file and it had a pass and no fail or error.
+func testPassedTestFiles(t *testing.T, s core.Store) {
+	P, F, E, K := core.StatusPass, core.StatusFail, core.StatusError, core.StatusSkip
+	played := func(env string, hours time.Duration, testID, text string, statuses ...core.Status) int64 {
+		run := local(env, t0.Add(hours*time.Hour), checks(testID, "f", statuses...)...)
+		run.Files = []core.SnapshotFile{snapFile("tests/"+testID+".sql", core.RoleTest, testID, text)}
+		return save(t, s, run)
+	}
+	played("local", 0, "a", "v1", P, P)        // a passes with v1
+	played("local", 1, "a", "v2", P, F)        // a fails with v2: not passed
+	played("local", 2, "a", "v3", E)           // errored: not passed
+	played("local", 3, "a", "v4", K, K)        // skipped only: not passed
+	played("other", 4, "b", "b1", P)           // another environment
+	latest := played("local", 5, "a", "v1", P) // v1 passes again, later
+	played("local", 6, "c", "c1", P, P, P)     // many checks, all pass
+
+	// A run with a pass for a test but a different test's file listed beside it.
+	mixed := local("local", t0.Add(7*time.Hour), append(checks("d", "f", P), checks("e", "f", F)...)...)
+	mixed.Files = []core.SnapshotFile{snapFile("tests/d.sql", core.RoleTest, "d", "d1"), snapFile("tests/e.sql", core.RoleTest, "e", "e1")}
+	save(t, s, mixed)
+
+	// A run with no file for its test (a pulled run, say) tells nothing.
+	save(t, s, remote("77", 1, core.RunComplete, t0.Add(8*time.Hour), checks("g", "f", P)...))
+
+	got, err := s.PassedTestFiles(ctx, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := func(text string) string { return snapFile("x", core.RoleTest, "x", text).Hash }
+	want := map[string]map[string]int64{
+		"a": {hash("v1"): latest}, // the latest run that passed it
+		"c": {hash("c1"): latest + 1},
+		"d": {hash("d1"): latest + 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("passed in local:\n got  %v\n want %v", got, want)
+	}
+
+	other, err := s.PassedTestFiles(ctx, "other")
+	if err != nil || len(other) != 1 || len(other["b"]) != 1 {
+		t.Errorf("passed in other: %v, %v; want only b", other, err)
+	}
+	if none, err := s.PassedTestFiles(ctx, "never-used"); err != nil || len(none) != 0 {
+		t.Errorf("an environment with no runs: %v, %v; want empty", none, err)
+	}
+}
+
 func snapFile(path string, role core.SnapshotRole, testID, text string) core.SnapshotFile {
 	sum := sha256.Sum256([]byte(text))
 	return core.SnapshotFile{Path: path, Role: role, TestID: testID, Hash: hex.EncodeToString(sum[:]), Size: int64(len(text)), Content: []byte(text)}
@@ -674,6 +723,10 @@ func testCancelledContext(t *testing.T, s core.Store) {
 		},
 		"LatestTestFile": func() error {
 			_, _, err := s.LatestTestFile(cancelled, "a")
+			return err
+		},
+		"PassedTestFiles": func() error {
+			_, err := s.PassedTestFiles(cancelled, "local")
 			return err
 		},
 	}

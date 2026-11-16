@@ -49,6 +49,14 @@ type Store interface {
 	// the text was kept. It returns ErrNotFound when the run has no such file.
 	GetSnapshotFile(ctx context.Context, runID int64, path string) (SnapshotFile, error)
 
+	// PassedTestFiles says which versions of each test's file have passed in an
+	// environment: for each test, the hash of its file (as recorded in a run the
+	// tester made there) mapped to the most recent run in which the test passed
+	// with that file. A test passes in a run when it has a passing check and no
+	// failed or errored one. A test that failed, never ran, or ran only with other
+	// content is absent. It is how "never played" is decided.
+	PassedTestFiles(ctx context.Context, environment string) (map[string]map[string]int64, error)
+
 	// LatestTestFile returns the snapshot of a test's file from the most recent
 	// run that played the test, with that run's ID. It returns ErrNotFound when
 	// no run of the tester's own has played it.

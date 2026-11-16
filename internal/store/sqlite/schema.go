@@ -50,4 +50,49 @@ var migrations = [][]string{
 	{ // version 2: the test tool's own detail, kept apart from the diagnostic
 		`ALTER TABLE run ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
 	},
+	{ // version 3: imported runs, the commit's dirty flag, what started a run, tool versions.
+		// SQLite cannot change a CHECK in place, so `run` is rebuilt without the
+		// one on `source` (the core validates it) and with the new columns, which
+		// get no CHECK either. migrate() turns foreign keys off for this step so
+		// dropping the old table does not cascade into `result`, and checks them
+		// again before committing. The recipe is SQLite's own: create the new
+		// table, copy, drop the old, rename.
+		`CREATE TABLE run_new (
+			id           INTEGER PRIMARY KEY,
+			source       TEXT NOT NULL,
+			environment  TEXT NOT NULL,
+			state        TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'expired')),
+			started_at   TEXT NOT NULL,
+			finished_at  TEXT NOT NULL,
+			exit_code    INTEGER NOT NULL,
+			external_id  TEXT NOT NULL,
+			attempt      INTEGER NOT NULL,
+			commit_sha   TEXT NOT NULL,
+			diagnostic   TEXT NOT NULL,
+			outcome      TEXT NOT NULL CHECK (outcome IN ('pass', 'fail', 'undetermined')),
+			reason       TEXT NOT NULL,
+			total        INTEGER NOT NULL,
+			failed       INTEGER NOT NULL,
+			detail       TEXT NOT NULL DEFAULT '',
+			dirty        INTEGER NOT NULL DEFAULT 0,
+			trigger_name TEXT NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO run_new (id, source, environment, state, started_at, finished_at, exit_code,
+				external_id, attempt, commit_sha, diagnostic, outcome, reason, total, failed, detail)
+			SELECT id, source, environment, state, started_at, finished_at, exit_code,
+				external_id, attempt, commit_sha, diagnostic, outcome, reason, total, failed, detail
+			FROM run`,
+		`DROP TABLE run`,
+		`ALTER TABLE run_new RENAME TO run`,
+		`CREATE UNIQUE INDEX run_key ON run (external_id, attempt) WHERE external_id <> ''`,
+		`CREATE INDEX run_started ON run (started_at)`,
+		`CREATE INDEX run_state ON run (state)`,
+		`CREATE TABLE run_tool (
+			run_id   INTEGER NOT NULL REFERENCES run (id) ON DELETE CASCADE,
+			position INTEGER NOT NULL,
+			name     TEXT NOT NULL,
+			version  TEXT NOT NULL,
+			PRIMARY KEY (run_id, position)
+		)`,
+	},
 }

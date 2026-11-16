@@ -284,6 +284,150 @@ func TestAVersion1FileGainsTheDetailColumn(t *testing.T) {
 	}
 }
 
+// Version 3 rebuilds the run table. That must keep every run and, above all, its
+// results: dropping the old table with foreign keys on would delete them.
+func TestAVersion2FileSurvivesTheRebuild(t *testing.T) {
+	old := migrations
+	t.Cleanup(func() { migrations = old })
+
+	path := newPath(t)
+	migrations = old[:2] // the schema as it was
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := formatTime(time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
+	for _, stmt := range []string{
+		`INSERT INTO run (id, source, environment, state, started_at, finished_at, exit_code, external_id, attempt,
+			commit_sha, diagnostic, detail, outcome, reason, total, failed)
+			VALUES (7, 'local', 'local', 'complete', '` + at + `', '` + at + `', 0, '', 0, '', '', 'old detail', 'fail', 'x', 2, 1)`,
+		`INSERT INTO run (id, source, environment, state, started_at, finished_at, exit_code, external_id, attempt,
+			commit_sha, diagnostic, detail, outcome, reason, total, failed)
+			VALUES (8, 'remote', 'deployed', 'complete', '` + at + `', '` + at + `', 0, '555', 1, 'abc', '', '', 'pass', '', 1, 0)`,
+		`INSERT INTO result (run_id, position, test_id, feature, name, status, duration_ns, message)
+			VALUES (7, 0, 'a', 'f', 'A', 'pass', 5, ''), (7, 1, 'b', 'f', 'B', 'fail', 6, 'broke'), (8, 0, 'a', 'f', 'A', 'pass', 7, '')`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	migrations = old // the program as it is now
+	s = openAt(t, path)
+	if got := pragma(t, s.db, "user_version"); got != len(old) {
+		t.Fatalf("version after upgrade = %d; want %d", got, len(old))
+	}
+
+	run, err := s.GetRun(bg, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Results) != 2 || run.Results[1].Message != "broke" || run.Detail != "old detail" {
+		t.Errorf("run 7 after the rebuild: %d results, detail %q; want both results and its detail", len(run.Results), run.Detail)
+	}
+	if run.Dirty || run.Trigger != "" || len(run.Tools) != 0 {
+		t.Errorf("an old run gained metadata: dirty %v, trigger %q, tools %v", run.Dirty, run.Trigger, run.Tools)
+	}
+	if got, err := s.FindByKey(bg, "555", 1); err != nil || got.ID != 8 || len(got.Results) != 1 {
+		t.Errorf("FindByKey after the rebuild: %+v, %v; the keyed run and its result must survive", got, err)
+	}
+
+	// Foreign keys are back on, so a result for a missing run is refused...
+	if got := pragma(t, s.db, "foreign_keys"); got != 1 {
+		t.Errorf("foreign_keys = %d after the upgrade; want 1", got)
+	}
+	if _, err := s.db.Exec(`INSERT INTO result (run_id, position, test_id, feature, name, status, duration_ns, message)
+		VALUES (999, 0, '', '', '', 'pass', 0, '')`); err == nil {
+		t.Error("a result for a missing run was accepted")
+	}
+	// ...the unique key is back, so the same remote run cannot be stored twice...
+	if _, err := s.db.Exec(`INSERT INTO run (source, environment, state, started_at, finished_at, exit_code, external_id, attempt,
+		commit_sha, diagnostic, outcome, reason, total, failed)
+		VALUES ('remote', 'deployed', 'complete', '', '', 0, '555', 1, '', '', 'pass', '', 0, 0)`); err == nil {
+		t.Error("a second run with the same key was accepted")
+	}
+	// ...and the new source is allowed.
+	imported := someRun(3)
+	imported.Source, imported.Environment = core.SourceImport, "network"
+	if id, err := s.SaveRun(bg, imported); err != nil {
+		t.Errorf("saving an imported run: %v", err)
+	} else if got, err := s.GetRun(bg, id); err != nil || got.Source != core.SourceImport {
+		t.Errorf("imported run came back as %+v, %v", got.Source, err)
+	}
+}
+
+// A rebuild that fails halfway changes nothing: the old table and its results
+// are still there, at the old version.
+func TestAFailedRebuildChangesNothing(t *testing.T) {
+	old := migrations
+	t.Cleanup(func() { migrations = old })
+
+	path := newPath(t)
+	migrations = old[:2]
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := formatTime(time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC))
+	for _, stmt := range []string{
+		`INSERT INTO run (id, source, environment, state, started_at, finished_at, exit_code, external_id, attempt,
+			commit_sha, diagnostic, detail, outcome, reason, total, failed)
+			VALUES (1, 'local', 'local', 'complete', '` + at + `', '` + at + `', 0, '', 0, '', '', '', 'fail', 'x', 2, 1)`,
+		`INSERT INTO result (run_id, position, test_id, feature, name, status, duration_ns, message)
+			VALUES (1, 0, 'a', 'f', 'A', 'pass', 5, ''), (1, 1, 'b', 'f', 'B', 'fail', 6, 'broke')`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	// A version 3 that starts the rebuild, drops the old table, then breaks.
+	migrations = [][]string{old[0], old[1], {
+		`CREATE TABLE run_new (id INTEGER PRIMARY KEY)`,
+		`DROP TABLE run`,
+		`THIS IS NOT SQL`,
+	}}
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "upgrading") {
+		t.Fatalf("Open with a broken rebuild: %v; want an upgrade error", err)
+	}
+
+	db := rawDB(t, path)
+	var runs, results int
+	if err := db.QueryRow("SELECT count(*) FROM run").Scan(&runs); err != nil || runs != 1 {
+		t.Errorf("%d runs after the failed rebuild (%v); want the original 1", runs, err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM result").Scan(&results); err != nil || results != 2 {
+		t.Errorf("%d results after the failed rebuild (%v); want the original 2", results, err)
+	}
+	if got := pragma(t, db, "user_version"); got != 2 {
+		t.Errorf("version = %d after the failed rebuild; want 2", got)
+	}
+}
+
+// An upgrade switches foreign keys off for its own connection. Whatever
+// happens, that connection must go back to the pool with them on again.
+func TestForeignKeysAreBackOnAfterAnUpgradeStep(t *testing.T) {
+	s := openAt(t, newPath(t))
+	inside := -1
+	err := s.writeTxFK(bg, false, func(conn *sql.Conn) error {
+		if err := conn.QueryRowContext(bg, "PRAGMA foreign_keys").Scan(&inside); err != nil {
+			return err
+		}
+		return sql.ErrConnDone // any failure: the transaction rolls back
+	})
+	if err == nil {
+		t.Fatal("the failing step reported success")
+	}
+	if inside != 0 {
+		t.Errorf("foreign_keys = %d inside the step; want 0", inside)
+	}
+	if got := pragma(t, s.db, "foreign_keys"); got != 1 {
+		t.Errorf("foreign_keys = %d afterwards; want 1", got)
+	}
+}
+
 func TestDeletingARunDeletesItsResults(t *testing.T) {
 	s := openAt(t, newPath(t))
 	id, err := s.SaveRun(bg, someRun(1))

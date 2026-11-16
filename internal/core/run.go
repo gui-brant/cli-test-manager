@@ -17,7 +17,31 @@ const (
 	// SourceRemote: the results were pulled from a result source (a CI
 	// service) that ran the tests without the tester.
 	SourceRemote Source = "remote"
+	// SourceImport: a result file that arrived from outside and was recorded
+	// as it is (for example the output of a load tool the tester never starts).
+	SourceImport Source = "import"
 )
+
+// Trigger says what started a local run. It is free text in the file, so a
+// later kind needs no schema change; these are the two the tester knows.
+type Trigger string
+
+const (
+	// TriggerManual: a person ran it, from the command line or the menu.
+	TriggerManual Trigger = "manual"
+	// TriggerHook: a hook or a script ran it, and said so with --trigger hook.
+	TriggerHook Trigger = "hook"
+)
+
+// Tool is the version of one tool a run used, as that tool reported it.
+type Tool struct {
+	// Name is the runner's name (or, for an imported run, the name given on
+	// the command line).
+	Name string
+	// Version is the first line the version command printed, or
+	// "unknown: <reason>" when it could not be read.
+	Version string
+}
 
 // Result is the outcome of one test within a run.
 type Result struct {
@@ -66,8 +90,19 @@ type Run struct {
 	// Both are zero values for local runs.
 	ExternalID string
 	Attempt    int
-	// CommitSHA is the commit a remote run was made for, when known.
+	// CommitSHA is the commit the run was made for, when known: the checkout's
+	// HEAD for a local run, the commit the CI service reports for a remote
+	// run, and the one given by the caller for an imported run.
 	CommitSHA string
+	// Dirty is true when the checkout had uncommitted changes (untracked files
+	// included) when a local run started. Always false when unknown.
+	Dirty bool
+	// Trigger says what started a local run. Empty for remote and imported
+	// runs.
+	Trigger Trigger
+	// Tools are the versions of the tools the run used, in a stable order.
+	// Empty when none were declared or given.
+	Tools []Tool
 	// Results are the per-test outcomes. Empty for pending and expired runs.
 	Results []Result
 	// Diagnostic is the real cause when the run failed for a reason that

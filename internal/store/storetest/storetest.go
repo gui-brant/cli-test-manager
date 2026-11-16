@@ -25,6 +25,7 @@ func Run(t *testing.T, open Open) {
 		fn   func(*testing.T, core.Store)
 	}{
 		{"a saved run round-trips every field", testRoundTrip},
+		{"an imported run keeps its commit, dirty flag, trigger and tool versions", testRunMetadata},
 		{"local runs are always new rows", testLocalRunsAreDistinct},
 		{"a keyed run replaces itself and keeps its ID", testKeyedRuns},
 		{"missing runs are ErrNotFound", testNotFound},
@@ -91,8 +92,12 @@ func sameRun(t *testing.T, got, want core.Run) {
 	t.Helper()
 	if got.Source != want.Source || got.Environment != want.Environment || got.State != want.State ||
 		got.ExitCode != want.ExitCode || got.ExternalID != want.ExternalID || got.Attempt != want.Attempt ||
-		got.CommitSHA != want.CommitSHA || got.Diagnostic != want.Diagnostic || got.Detail != want.Detail {
+		got.CommitSHA != want.CommitSHA || got.Diagnostic != want.Diagnostic || got.Detail != want.Detail ||
+		got.Dirty != want.Dirty || got.Trigger != want.Trigger {
 		t.Errorf("run fields differ:\n got  %+v\n want %+v", got, want)
+	}
+	if len(got.Tools) != len(want.Tools) || (len(want.Tools) > 0 && !reflect.DeepEqual(got.Tools, want.Tools)) {
+		t.Errorf("tools differ:\n got  %+v\n want %+v", got.Tools, want.Tools)
 	}
 	if !got.StartedAt.Equal(want.StartedAt) || !got.FinishedAt.Equal(want.FinishedAt) {
 		t.Errorf("times differ: got %v to %v; want %v to %v", got.StartedAt, got.FinishedAt, want.StartedAt, want.FinishedAt)
@@ -138,6 +143,57 @@ func testRoundTrip(t *testing.T, s core.Store) {
 			t.Errorf("result %d is %q; want %q", i, r.Name, want.Results[i].Name)
 		}
 	}
+}
+
+// The metadata added for integration: where the run came from (including the
+// import source), the commit and whether the checkout was dirty, what started
+// it, and the tool versions in the order they were given.
+func testRunMetadata(t *testing.T, s core.Store) {
+	imported := core.Run{
+		Source: core.SourceImport, Environment: "network", State: core.RunComplete,
+		StartedAt: t0, FinishedAt: t0.Add(time.Minute), CommitSHA: "cafe1234",
+		Tools:   []core.Tool{{Name: "k6", Version: "k6 v1.4.0"}, {Name: "pgbench", Version: "unknown: not given"}},
+		Results: []core.Result{result("load-ramp", "general", "p95 under 450ms", core.StatusPass)},
+	}
+	got, err := s.GetRun(ctx, save(t, s, imported))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRun(t, got, imported)
+
+	hook := local("local", t0.Add(time.Hour), result("a", "f", "A", core.StatusPass))
+	hook.CommitSHA, hook.Dirty, hook.Trigger = "abc", true, core.TriggerHook
+	got, err = s.GetRun(ctx, save(t, s, hook))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRun(t, got, hook)
+	if !got.Dirty || got.Trigger != core.TriggerHook {
+		t.Errorf("dirty %v, trigger %q; want true, hook", got.Dirty, got.Trigger)
+	}
+
+	// A plain run has none of it: no tools, not dirty, no trigger.
+	plain := local("local", t0.Add(2*time.Hour), result("a", "f", "A", core.StatusPass))
+	got, err = s.GetRun(ctx, save(t, s, plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Dirty || got.Trigger != "" || len(got.Tools) != 0 {
+		t.Errorf("a plain run came back with dirty %v, trigger %q, tools %v", got.Dirty, got.Trigger, got.Tools)
+	}
+
+	// Replacing a keyed run replaces its tools too, not adds to them.
+	r := remote("77", 1, core.RunComplete, t0, result("a", "f", "A", core.StatusPass))
+	r.Tools = []core.Tool{{Name: "x", Version: "1"}, {Name: "y", Version: "2"}}
+	id := save(t, s, r)
+	r.Tools = []core.Tool{{Name: "z", Version: "3"}}
+	if again := save(t, s, r); again != id {
+		t.Fatalf("a keyed run got ID %d after %d", again, id)
+	}
+	if got, err = s.GetRun(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	sameRun(t, got, r)
 }
 
 func testLocalRunsAreDistinct(t *testing.T, s core.Store) {

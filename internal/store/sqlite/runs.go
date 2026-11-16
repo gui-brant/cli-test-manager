@@ -58,24 +58,28 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 			formatTime(run.StartedAt), formatTime(run.FinishedAt), run.ExitCode,
 			run.ExternalID, run.Attempt, run.CommitSHA, run.Diagnostic, run.Detail,
 			string(verdict.Outcome), verdict.Reason, len(run.Results), failed,
+			boolToInt(run.Dirty), string(run.Trigger),
 		}
 		if id != 0 {
 			if _, err := conn.ExecContext(ctx, `UPDATE run SET
 				source = ?, environment = ?, state = ?, started_at = ?, finished_at = ?, exit_code = ?,
 				external_id = ?, attempt = ?, commit_sha = ?, diagnostic = ?, detail = ?,
-				outcome = ?, reason = ?, total = ?, failed = ?
+				outcome = ?, reason = ?, total = ?, failed = ?, dirty = ?, trigger_name = ?
 				WHERE id = ?`, append(fields, id)...); err != nil {
 				return err
 			}
 			if _, err := conn.ExecContext(ctx, `DELETE FROM result WHERE run_id = ?`, id); err != nil {
 				return err
 			}
+			if _, err := conn.ExecContext(ctx, `DELETE FROM run_tool WHERE run_id = ?`, id); err != nil {
+				return err
+			}
 		} else {
 			res, err := conn.ExecContext(ctx, `INSERT INTO run (
 				source, environment, state, started_at, finished_at, exit_code,
 				external_id, attempt, commit_sha, diagnostic, detail,
-				outcome, reason, total, failed)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields...)
+				outcome, reason, total, failed, dirty, trigger_name)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields...)
 			if err != nil {
 				return err
 			}
@@ -93,6 +97,12 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 		defer stmt.Close()
 		for i, r := range run.Results {
 			if _, err := stmt.ExecContext(ctx, id, i, r.TestID, r.Feature, r.Name, string(r.Status), int64(r.Duration), r.Message); err != nil {
+				return err
+			}
+		}
+		for i, tool := range run.Tools {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO run_tool (run_id, position, name, version) VALUES (?, ?, ?, ?)`,
+				id, i, tool.Name, tool.Version); err != nil {
 				return err
 			}
 		}
@@ -130,11 +140,13 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 	var (
 		run                              core.Run
 		source, state, started, finished string
+		dirty                            int
+		trigger                          string
 	)
 	err = tx.QueryRowContext(ctx, `SELECT id, source, environment, state, started_at, finished_at, exit_code,
-		external_id, attempt, commit_sha, diagnostic, detail FROM run `+where, args...).
+		external_id, attempt, commit_sha, diagnostic, detail, dirty, trigger_name FROM run `+where, args...).
 		Scan(&run.ID, &source, &run.Environment, &state, &started, &finished, &run.ExitCode,
-			&run.ExternalID, &run.Attempt, &run.CommitSHA, &run.Diagnostic, &run.Detail)
+			&run.ExternalID, &run.Attempt, &run.CommitSHA, &run.Diagnostic, &run.Detail, &dirty, &trigger)
 	if errors.Is(err, sql.ErrNoRows) {
 		return core.Run{}, fmt.Errorf("store: run not found: %w", core.ErrNotFound)
 	}
@@ -142,6 +154,8 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 		return core.Run{}, fmt.Errorf("store: reading run: %w", err)
 	}
 
+	run.Dirty = dirty != 0
+	run.Trigger = core.Trigger(trigger)
 	if run.Source, err = parseSource(source); err != nil {
 		return core.Run{}, err
 	}
@@ -179,12 +193,35 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 	if err := rows.Err(); err != nil {
 		return core.Run{}, fmt.Errorf("store: reading results: %w", err)
 	}
+
+	toolRows, err := tx.QueryContext(ctx, `SELECT name, version FROM run_tool WHERE run_id = ? ORDER BY position`, run.ID)
+	if err != nil {
+		return core.Run{}, fmt.Errorf("store: reading tool versions: %w", err)
+	}
+	defer toolRows.Close()
+	for toolRows.Next() {
+		var t core.Tool
+		if err := toolRows.Scan(&t.Name, &t.Version); err != nil {
+			return core.Run{}, fmt.Errorf("store: reading tool versions: %w", err)
+		}
+		run.Tools = append(run.Tools, t)
+	}
+	if err := toolRows.Err(); err != nil {
+		return core.Run{}, fmt.Errorf("store: reading tool versions: %w", err)
+	}
 	return run, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func parseSource(s string) (core.Source, error) {
 	switch src := core.Source(s); src {
-	case core.SourceLocal, core.SourceRemote:
+	case core.SourceLocal, core.SourceRemote, core.SourceImport:
 		return src, nil
 	}
 	return "", fmt.Errorf("store: unknown run source %q", s)

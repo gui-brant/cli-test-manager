@@ -180,7 +180,10 @@ func isBusy(err error) bool {
 // the transaction, so two programs opening a new file together do not both
 // create the tables.
 func (s *Store) migrate(ctx context.Context) error {
-	return s.writeTx(ctx, func(conn *sql.Conn) error {
+	// Foreign keys are off for the upgrade: a step may rebuild a table, and
+	// dropping the old one would otherwise cascade into the tables that point
+	// at it. They are checked before the commit instead.
+	return s.writeTxFK(ctx, false, func(conn *sql.Conn) error {
 		var version int
 		if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 			return err
@@ -195,6 +198,9 @@ func (s *Store) migrate(ctx context.Context) error {
 				}
 			}
 		}
+		if err := foreignKeyCheck(ctx, conn); err != nil {
+			return err
+		}
 		// PRAGMA cannot take parameters; both values are integers we control.
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id = %d", applicationID)); err != nil {
 			return err
@@ -207,12 +213,44 @@ func (s *Store) migrate(ctx context.Context) error {
 // writeTx runs fn in a transaction that takes the write lock at once (BEGIN
 // IMMEDIATE), so two writers queue behind the busy timeout instead of one
 // failing halfway through. fn's error rolls the transaction back.
-func (s *Store) writeTx(ctx context.Context, fn func(conn *sql.Conn) error) (err error) {
+func (s *Store) writeTx(ctx context.Context, fn func(conn *sql.Conn) error) error {
+	return s.writeTxFK(ctx, true, fn)
+}
+
+// foreignKeyCheck fails when any row points at a row that does not exist. An
+// upgrade runs it before committing, because it ran with foreign keys off.
+func foreignKeyCheck(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return errors.New("store: the upgrade left rows that point at missing rows; nothing was changed")
+	}
+	return rows.Err()
+}
+
+// writeTxFK is writeTx with a choice about foreign keys. With foreignKeys false
+// they are switched off for this connection BEFORE the transaction starts
+// (SQLite ignores the switch inside one) and back on afterwards.
+func (s *Store) writeTxFK(ctx context.Context, foreignKeys bool, fn func(conn *sql.Conn) error) (err error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+
+	if !foreignKeys {
+		if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+			return err
+		}
+		// Runs after the rollback below and before the connection goes back to
+		// the pool, so no later user of it works without foreign keys.
+		defer func() {
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
+		}()
+	}
 
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err

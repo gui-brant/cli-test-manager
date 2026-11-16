@@ -47,6 +47,9 @@ type Deps struct {
 	Location *time.Location
 	Runner   core.Runner
 	Creds    core.Credentials
+	// Checkout says which commit a run is made against and whether the files
+	// have uncommitted changes. Nil means neither is recorded.
+	Checkout core.Checkout
 	// IsTerminal says whether standard input is a terminal. Only then does a
 	// run of every test ask for confirmation.
 	IsTerminal bool

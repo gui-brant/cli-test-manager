@@ -195,6 +195,51 @@ func contains(t *testing.T, what, text string, wants ...string) {
 
 // ---- run -------------------------------------------------------------------
 
+type fakeCheckout struct {
+	commit string
+	dirty  bool
+}
+
+func (c fakeCheckout) State(context.Context, string) (string, bool) { return c.commit, c.dirty }
+
+// A run says what it was made against, and what started it, in its detail.
+func TestARunRecordsWhatItWasMadeAgainstAndWhatStartedIt(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.deps.Checkout = fakeCheckout{commit: "abc1234def5678", dirty: true}
+
+	if code := p.do("run", "--env", "local", "--feature", "notes", "--trigger", "hook", "--yes"); code != ExitOK {
+		t.Fatalf("exit %d; stderr: %s", code, p.stderr())
+	}
+	p.do("history", "1")
+	contains(t, "history 1", p.stdout(),
+		"commit abc1234 + uncommitted changes", "started by hook",
+		"tools http unknown: no version command declared")
+}
+
+// Without the flag a run is manual, and without git there is no commit.
+func TestARunIsManualByDefaultAndSaysWhenThereIsNoCommit(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	if code := p.do("run", "--env", "local", "--feature", "notes", "--yes"); code != ExitOK {
+		t.Fatalf("exit %d; stderr: %s", code, p.stderr())
+	}
+	p.do("history", "1")
+	contains(t, "history 1", p.stdout(), "commit not recorded", "started by manual")
+}
+
+func TestATriggerThatIsNeitherManualNorHookIsRefusedBeforeAnythingRuns(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	if code := p.do("run", "--env", "local", "--trigger", "cron", "--yes"); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), `--trigger must be "manual" or "hook", not "cron"`)
+	if p.historyExists() {
+		t.Error("a refused request created the history file")
+	}
+	if len(p.runner.calls) != 0 {
+		t.Errorf("%d commands were started", len(p.runner.calls))
+	}
+}
+
 func TestRunThatPasses(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	if code := p.do("run", "--env", "local"); code != ExitOK {

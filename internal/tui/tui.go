@@ -50,6 +50,9 @@ type Deps struct {
 	Creds   core.Credentials
 	Environ func() []string
 	Now     func() time.Time
+	// Checkout says which commit a run is made against and whether the files
+	// have uncommitted changes. Nil means neither is recorded.
+	Checkout core.Checkout
 	// Save opens the history file for writing, creating it when it is not there.
 	Save func(path string) (core.Store, error)
 	// Context ends a run in progress when the program is told to stop. Nil means

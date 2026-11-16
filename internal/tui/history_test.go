@@ -180,7 +180,8 @@ func TestALongRunScrollsAndTheDetailKeyDoesNotPageDown(t *testing.T) {
 	if m.View() != first {
 		t.Errorf("d scrolled the screen")
 	}
-	press(m, "pgdown", "pgdown", "pgdown", "pgdown")
+	// The header is longer now (commit and tools lines), so page to the end.
+	press(m, "pgdown", "pgdown", "pgdown", "pgdown", "pgdown", "pgdown")
 	mustContain(t, "run", m.View(), "check-40")
 	for i := 0; i < 60; i++ {
 		press(m, "up")

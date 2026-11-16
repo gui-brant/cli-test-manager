@@ -22,6 +22,51 @@ func result(testID, name string, status core.Status, message string, number int)
 	}
 }
 
+// What a run was made against: the short commit, the uncommitted-changes note,
+// what started it and each tool's version, one per line.
+func TestBuildShowsTheCommitTriggerAndTools(t *testing.T) {
+	header := func(run core.Run) string {
+		run.State, run.StartedAt, run.FinishedAt = core.RunComplete, start, finish
+		return Build(query.RunDetail{Run: run, Verdict: core.Verdict{Outcome: core.OutcomePass}}, 3, est).Header
+	}
+
+	local := core.Run{
+		Source: core.SourceLocal, Environment: "local", Trigger: core.TriggerHook,
+		CommitSHA: "0123456789abcdef0123456789abcdef01234567", Dirty: true,
+		Tools: []core.Tool{
+			{Name: "pgtap", Version: "supabase 2.1.0"},
+			{Name: "rest", Version: "unknown: no version command declared"},
+		},
+	}
+	want := "Run 3  PASS\n" +
+		"  when         2026-11-11 10:09:32 to 2026-11-11 10:09:38\n" +
+		"  source       local, environment local\n" +
+		"  commit       0123456 + uncommitted changes\n" +
+		"  started by   hook\n" +
+		"  tools        pgtap  supabase 2.1.0\n" +
+		"               rest   unknown: no version command declared"
+	if got := header(local); got != want {
+		t.Errorf("header:\n%s\nwant:\n%s", got, want)
+	}
+
+	local.Dirty = false
+	if got := header(local); !strings.Contains(got, "commit       0123456\n") {
+		t.Errorf("a clean checkout shows a note:\n%s", got)
+	}
+
+	// An imported file says "not given" when the caller passed no commit, and a
+	// pulled run shows neither line: its commit is on the remote run line.
+	imported := core.Run{Source: core.SourceImport, Environment: "network"}
+	if got := header(imported); !strings.Contains(got, "commit       not given") {
+		t.Errorf("an imported run with no commit:\n%s", got)
+	}
+	remote := core.Run{Source: core.SourceRemote, Environment: "deployed", ExternalID: "9", Attempt: 1, CommitSHA: "abc"}
+	got := header(remote)
+	if strings.Contains(got, "tools") || strings.Contains(got, "started by") || strings.Contains(got, "commit       ") {
+		t.Errorf("a pulled run shows local-only lines:\n%s", got)
+	}
+}
+
 // A failed run with everything a view can hold, compared as a whole.
 func TestBuildAFailedRunWithEveryPart(t *testing.T) {
 	d := query.RunDetail{
@@ -44,7 +89,9 @@ func TestBuildAFailedRunWithEveryPart(t *testing.T) {
 		"  reason       2 of 3 results failed\n" +
 		"  when         2026-11-11 10:09:32 to 2026-11-11 10:09:38\n" +
 		"  source       local, environment deployed\n" +
-		"  exit code    2"
+		"  exit code    2\n" +
+		"  commit       not recorded\n" +
+		"  tools        not recorded"
 	if got.Header != wantHeader {
 		t.Errorf("header:\n%s\nwant:\n%s", got.Header, wantHeader)
 	}

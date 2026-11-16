@@ -28,6 +28,9 @@ type Service struct {
 	Environ func() []string
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// Checkout says which commit the run is made against and whether the
+	// files have uncommitted changes. Nil means neither is recorded.
+	Checkout core.Checkout
 }
 
 // Selection says which tests to run. Both fields empty means every test. Both
@@ -46,6 +49,8 @@ type Request struct {
 	// Environment names the manifest environment to run against.
 	Environment string
 	Select      Selection
+	// Trigger says what started the run. Empty means core.TriggerManual.
+	Trigger core.Trigger
 	// Progress, when set, is told about each skipped test before the run
 	// starts, then about the start and the end of each test.
 	Progress func(Event)
@@ -125,6 +130,18 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 	}
 
 	run := core.Run{Source: core.SourceLocal, Environment: req.Environment, State: core.RunComplete, StartedAt: s.now()}
+	// What this run is about, recorded before the first test so a test that
+	// changes a file cannot change the answer: the commit and whether the files
+	// were already modified, what started it, and the version of each tool it
+	// will use.
+	run.Trigger = req.Trigger
+	if run.Trigger == "" {
+		run.Trigger = core.TriggerManual
+	}
+	if s.Checkout != nil {
+		run.CommitSHA, run.Dirty = s.Checkout.State(ctx, req.Root)
+	}
+	run.Tools = s.toolVersions(ctx, req, p)
 	var diagnostics, details []string
 	total := len(p.tests)
 

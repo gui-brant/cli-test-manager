@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gui-brant/cli-test-manager/internal/checkout/git"
 	"github.com/gui-brant/cli-test-manager/internal/cli"
 	"github.com/gui-brant/cli-test-manager/internal/core"
 	"github.com/gui-brant/cli-test-manager/internal/creds/env"
@@ -41,6 +42,7 @@ func main() {
 		Location:   time.Local,
 		Runner:     runner.New(),
 		Creds:      env.New(),
+		Checkout:   git.New(),
 		IsTerminal: isTerminal(os.Stdin),
 
 		ProjectsFile: projectsFile,
@@ -54,11 +56,12 @@ func main() {
 				History:  openHistory,
 				Loc:      time.Local,
 				// The same parts the run command uses.
-				Runner:  runner.New(),
-				Creds:   env.New(),
-				Environ: os.Environ,
-				Now:     time.Now,
-				Save:    func(path string) (core.Store, error) { return sqlite.Open(path) },
+				Runner:   runner.New(),
+				Creds:    env.New(),
+				Environ:  os.Environ,
+				Now:      time.Now,
+				Checkout: git.New(),
+				Save:     func(path string) (core.Store, error) { return sqlite.Open(path) },
 				// Pulling from GitHub, when a project's manifest says to.
 				NewSource: func(token string) core.ResultSource { return github.New(token) },
 			})

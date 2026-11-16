@@ -34,6 +34,47 @@ type Run struct {
 	Detail string
 }
 
+// commitText says which commit a run was made against: the short commit and,
+// when the files had uncommitted changes, a note saying so. A run with no
+// commit (a folder not under git, or a file imported without one) says that.
+func commitText(run core.Run) string {
+	if run.CommitSHA == "" {
+		if run.Source == core.SourceImport {
+			return "not given"
+		}
+		return "not recorded"
+	}
+	short := run.CommitSHA
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	if run.Dirty {
+		return short + " + uncommitted changes"
+	}
+	return short
+}
+
+// toolsText lists the tool versions a run used, one per line under a "tools"
+// label, or says there are none.
+func toolsText(tools []core.Tool) string {
+	if len(tools) == 0 {
+		return "  tools        not recorded\n"
+	}
+	width := 0
+	for _, t := range tools {
+		width = max(width, len(t.Name))
+	}
+	var b strings.Builder
+	for i, t := range tools {
+		label := "  tools       "
+		if i > 0 {
+			label = "              "
+		}
+		fmt.Fprintf(&b, "%s %-*s  %s\n", label, width, t.Name, t.Version)
+	}
+	return b.String()
+}
+
 // HasDetail says whether the run has tool detail to offer.
 func (r Run) HasDetail() bool { return r.Detail != "" }
 
@@ -54,6 +95,15 @@ func Build(d query.RunDetail, id int64, loc *time.Location) Run {
 	}
 	if run.ExternalID != "" {
 		fmt.Fprintf(&head, "  remote run   %s, attempt %d, commit %s\n", run.ExternalID, run.Attempt, Dash(run.CommitSHA))
+	}
+	// A run the tester started or recorded says what it was made against. A
+	// pulled run already shows its commit above, and has no tools of its own.
+	if run.Source != core.SourceRemote {
+		fmt.Fprintf(&head, "  commit       %s\n", commitText(run))
+		if run.Trigger != "" {
+			fmt.Fprintf(&head, "  started by   %s\n", run.Trigger)
+		}
+		head.WriteString(toolsText(run.Tools))
 	}
 
 	var results strings.Builder

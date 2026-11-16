@@ -23,8 +23,15 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	var ids stringList
 	fs.Var(&ids, "test", "run only this test; repeat it to run several")
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	trigger := fs.String("trigger", string(core.TriggerManual),
+		"what started this run, recorded with it: manual (a person) or hook (a git hook or script)")
 	if code, stop := a.parseFlags(fs, args, 0); stop {
 		return code
+	}
+	switch core.Trigger(*trigger) {
+	case core.TriggerManual, core.TriggerHook:
+	default:
+		return a.errorf("--trigger must be %q or %q, not %q", core.TriggerManual, core.TriggerHook, *trigger)
 	}
 
 	loaded, err := a.load(manifestPath)
@@ -37,12 +44,13 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 		return a.errorf("%v", err)
 	}
 
-	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now}
+	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now, Checkout: a.Checkout}
 	req := execute.Request{
 		Manifest:    m,
 		Root:        loaded.Root,
 		Environment: envName,
 		Select:      execute.Selection{TestIDs: ids, Feature: *feature},
+		Trigger:     core.Trigger(*trigger),
 		Progress:    a.progress,
 	}
 

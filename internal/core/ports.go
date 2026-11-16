@@ -200,3 +200,14 @@ type Runner interface {
 	// error wrapping ctx's error.
 	Run(ctx context.Context, inv Invocation) (Output, error)
 }
+
+// Checkout says which version of a project's files a run was made against. The
+// first implementation asks git; a project kept some other way, or none, uses
+// an implementation that knows nothing.
+type Checkout interface {
+	// State returns the commit the folder is at and whether it has uncommitted
+	// changes (untracked files included, ignored files not). It never fails: a
+	// folder that is not under version control, or a tool that is missing,
+	// gives an empty commit and false, which means "not known".
+	State(ctx context.Context, dir string) (commit string, dirty bool)
+}

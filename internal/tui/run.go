@@ -23,7 +23,7 @@ func (s selection) canRun() error {
 }
 
 func (s selection) service(store core.Store) *execute.Service {
-	return &execute.Service{Runner: s.deps.Runner, Creds: s.deps.Creds, Environ: s.deps.Environ, Now: s.deps.Now, Store: store}
+	return &execute.Service{Runner: s.deps.Runner, Creds: s.deps.Creds, Environ: s.deps.Environ, Now: s.deps.Now, Store: store, Checkout: s.deps.Checkout}
 }
 
 func (s selection) request(pick execute.Selection) execute.Request {

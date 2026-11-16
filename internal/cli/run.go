@@ -30,6 +30,7 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 	fs.Var(&changed, "changed", "run only the tests of the features this changed file selects (a path relative to the project); "+
 		"repeat it, or use - to read one path per line from standard input")
 	unplayed := fs.Bool("unplayed", false, "leave out the tests that already passed in this environment with their file as it is now")
+	dryRun := fs.Bool("dry-run", false, "say which tests would run, and run nothing: no command is started and nothing is saved")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `Usage: tester run [flags]
 
@@ -56,6 +57,14 @@ combine: a test runs only if it passes every one.
 When the narrowing leaves nothing to run (nothing changed, or everything
 already passed) that is a success: it says so, exits 0, and saves nothing. A
 request that cannot run at all (a bad environment, a missing secret) exits 2.
+
+  --dry-run         decide what would run and say so, and stop: no command is
+                    started, nothing is saved, no history file is created, and
+                    nothing is asked. It prints one line "would run  <test id>"
+                    for each test, so a script can look for those lines (for
+                    example to prepare something only when a test will run).
+                    It exits 0 whether or not there is anything to run, and 2
+                    when the request could not run.
 
 Flags:
 `)
@@ -120,14 +129,24 @@ Flags:
 	if err != nil {
 		return a.errorf("%v", err)
 	}
-	// The request is sound, so this project is being used; --yes asks nothing.
-	if a.remember(ctx, loaded, *yes) {
+	// The request is sound, so this project is being used; --yes and --dry-run ask nothing.
+	if a.remember(ctx, loaded, *yes || *dryRun) {
 		return ExitCancelled
 	}
 
 	a.printChanged(preview.Changed)
 	if len(preview.Tests) == 0 {
 		a.printNothingToRun(preview, envName)
+		return ExitOK
+	}
+	if *dryRun {
+		for _, sk := range preview.Skipped {
+			fmt.Fprintf(a.Stdout, "skipped  %s  (%s)\n", sk.Test.ID, sk.Reason)
+		}
+		for _, t := range preview.Tests {
+			fmt.Fprintf(a.Stdout, "would run  %s\n", t.ID)
+		}
+		fmt.Fprintf(a.Stdout, "Dry run: %s would run in %s; nothing was started or saved.\n", plural(len(preview.Tests), "test", "tests"), envName)
 		return ExitOK
 	}
 

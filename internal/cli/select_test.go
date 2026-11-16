@@ -198,6 +198,68 @@ func TestUnplayedIsPerEnvironment(t *testing.T) {
 	contains(t, "stdout", p.stdout(), "skipped users-table", "runs only in", "[1/2] login-flow ... ok", "[2/2] note-create ... ok")
 }
 
+// A dry run says what would run, with a line a script can look for, and changes
+// nothing: no command, no history file, no question.
+func TestDryRunSaysWhatWouldRunAndChangesNothing(t *testing.T) {
+	p := newProject(t, snapshotManifest)
+	p.deps.Tree = tree.New()
+	p.deps.IsTerminal = true // and still nothing is asked
+
+	if code := p.do("run", "--env", "local", "--changed", "db/a.sql", "--dry-run"); code != ExitOK {
+		t.Fatalf("exit %d; stderr: %s", code, p.stderr())
+	}
+	contains(t, "stdout", p.stdout(), "Changed files: 1; they select: accounts",
+		"would run users-table", "would run login-flow", "Dry run: 2 tests would run in local; nothing was started or saved.")
+	// The line a script looks for keeps its two spaces: the helper above squashes them.
+	if !strings.Contains(p.out.String(), "\nwould run  users-table\n") {
+		t.Errorf("the raw line is not 'would run  <id>':\n%q", p.out.String())
+	}
+	if strings.Contains(p.stdout(), "note-create") || strings.Contains(p.stdout(), "[1/") {
+		t.Errorf("a test of another feature, or a run, appeared:\n%s", p.stdout())
+	}
+	if p.historyExists() || commandsStarted(p) != 0 || strings.Contains(p.stderr(), "[y/N]") {
+		t.Errorf("history created %v, %d commands started, stderr %q", p.historyExists(), commandsStarted(p), p.stderr())
+	}
+}
+
+func TestDryRunListsWhatWasLeftOutAndIsSilentWhenThereIsNothing(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.deps.Tree = tree.New()
+	p.do("run", "--env", "local", "--yes")
+	put(t, p, "tests/http/login_flow.http", "GET /login/v2\n")
+	p.runner.calls = nil
+
+	p.do("run", "--env", "local", "--unplayed", "--dry-run")
+	contains(t, "dry run", p.stdout(), "skipped users-table (already passed in local with this file (run 1))",
+		"would run login-flow", "Dry run: 1 test would run in local")
+	if commandsStarted(p) != 0 {
+		t.Errorf("%d commands started", commandsStarted(p))
+	}
+
+	// Nothing to run: no "would run" line at all, and still exit 0.
+	put(t, p, "tests/http/login_flow.http", "GET /login\n") // back to the version that passed
+	if code := p.do("run", "--env", "local", "--unplayed", "--dry-run"); code != ExitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if strings.Contains(p.stdout(), "would run") || !strings.Contains(p.stdout(), "Nothing to run") {
+		t.Errorf("a dry run with nothing to run:\n%s", p.stdout())
+	}
+	p.do("history")
+	if n := strings.Count(p.stdout(), "\n1 ") + strings.Count(p.stdout(), "\n2 "); n != 1 {
+		t.Errorf("a dry run saved a run:\n%s", p.stdout())
+	}
+}
+
+func TestADryRunOfARequestThatCannotRunStillFails(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	if code := p.do("run", "--env", "nowhere", "--dry-run"); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	if code := p.do("run", "--env", "staging", "--dry-run"); code != ExitError {
+		t.Errorf("a missing secret: exit %d; want %d", code, ExitError)
+	}
+}
+
 func TestHelpExplainsChangedAndUnplayed(t *testing.T) {
 	p := newProject(t, twoEnvironments)
 	if code := p.do("run", "-h"); code != ExitOK {

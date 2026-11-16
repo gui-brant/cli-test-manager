@@ -23,16 +23,22 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 	offset := fs.Int("offset", 0, "skip this many runs")
 	detail := fs.Bool("detail", false, "with a run number: also show the test tool's own detail on the failed results "+
 		"(stack traces, error objects). It is long and mostly useful to whoever writes the tests, so it is hidden unless asked for")
+	checks := fs.Bool("checks", false, "with a run number: list every check of a test that printed several, "+
+		"not only the failed ones. A test counts once whatever number of checks it printed")
 	// "tester history -h" explains what a run's view is made of; the general help
 	// does not repeat it.
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `Usage: tester history [flags]
-       tester history <run number> [--detail]
+       tester history <run number> [--checks] [--detail]
 
 With no run number it lists runs, newest first. With one it shows that run in full.
 
 What "history <run number>" shows, in order:
-  Results       every result; a failed one has its short message under it
+  Results       one row per test, with its verdict. A test that printed several
+                checks shows how many, and lists only its failed checks (with
+                their short messages); --checks lists every check. A test with
+                one check shows that check, as it always did. Results that
+                belong to no listed test are rows of their own.
   Diagnostic    what the commands themselves printed when one crashed, timed out
                 or exited with an error (only when there is something to show)
   Tool detail   only with --detail: the test tool's own stack traces and error
@@ -56,6 +62,9 @@ Flags:
 	if *detail && len(rest) == 0 {
 		return a.errorf("--detail shows one run in full: tester history <run number> --detail")
 	}
+	if *checks && len(rest) == 0 {
+		return a.errorf("--checks shows one run in full: tester history <run number> --checks")
+	}
 
 	loaded, err := a.load(manifestPath)
 	if err != nil {
@@ -74,7 +83,7 @@ Flags:
 	}
 
 	if len(rest) == 1 {
-		return a.showRun(ctx, loaded, store, rest[0], *detail)
+		return a.showRun(ctx, loaded, store, rest[0], *detail, *checks)
 	}
 	if store == nil {
 		fmt.Fprintln(a.Stdout, "No runs yet.")
@@ -120,7 +129,7 @@ Flags:
 	return ExitOK
 }
 
-func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *sqlite.Store, arg string, detail bool) int {
+func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *sqlite.Store, arg string, detail, checks bool) int {
 	id, err := strconv.ParseInt(arg, 10, 64)
 	if err != nil || id <= 0 {
 		return a.errorf("%q is not a run number", arg)
@@ -138,10 +147,13 @@ func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *s
 
 	// The words are built by the view package, which the menu shares; this command
 	// puts them in order and says how to see the detail.
-	parts := view.Build(d, id, a.loc)
+	parts := view.BuildWith(d, id, a.loc, view.Options{Checks: checks})
 	fmt.Fprintln(a.Stdout, parts.Header)
 	fmt.Fprintln(a.Stdout)
 	fmt.Fprintln(a.Stdout, parts.Results)
+	if parts.HasHiddenChecks() {
+		fmt.Fprintf(a.Stdout, "\n%s\nShow every check with: tester history %d --checks\n", view.ChecksHint, id)
+	}
 	if parts.Diagnostic != "" {
 		fmt.Fprintln(a.Stdout)
 		fmt.Fprintln(a.Stdout, parts.Diagnostic)

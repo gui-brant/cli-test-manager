@@ -179,7 +179,7 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 			}
 			done.Failed, done.Reason = true, fail.cause
 		} else if n := failedCount(results); n > 0 {
-			done.Failed, done.Reason = true, fmt.Sprintf("%d of %d results failed", n, len(results))
+			done.Failed, done.Reason = true, fmt.Sprintf("%d of %d checks failed", n, len(results))
 		}
 		// The command's own error output, when failing results explain the exit
 		// code but the command also said something on its error stream.

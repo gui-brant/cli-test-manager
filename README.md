@@ -40,12 +40,12 @@ The tester looks for the manifest in the current folder and the folders above it
 |---|---|
 | `tester run [--env NAME] [--feature NAME] [--test ID ...] [--yes]` | runs tests and saves the run. A run of every test asks "Are you sure?" at a terminal; `--yes` skips it, and a hook (no terminal) is never asked |
 | `tester history [--env] [--feature] [--source] [--limit] [--offset]` | lists runs, newest first |
-| `tester history <n> [--detail]` | shows one run: its results, the diagnostic when a command crashed or timed out, and with `--detail` the test tool's own stack traces |
+| `tester history <n> [--checks] [--detail]` | shows one run: one row per test with its verdict (a test that printed several checks shows how many and lists only its failed ones; `--checks` lists every check), the diagnostic when a command crashed or timed out, and with `--detail` the test tool's own stack traces |
 | `tester pull` | brings in the results of the workflow's runs that are not in the history yet, stopping at the first run it already has. A run still going is kept as a placeholder and checked again next time; a run whose file expired or is missing is recorded as such. Exit 0 whatever the pulled tests did, 2 if it could not pull |
 | `tester import [--env NAME] [--test ID] [--format junit\|tap] [--commit SHA] [--tool name=version] [--when TIME] <file \| ->` | records a result file that came from outside (the output of a load or network tool the tester never starts) as one run. The environment must allow `import`. Results go to the test their suite or class name points at, or all to `--test`. The same file into the same environment twice is stored once. Exit 0 whatever the results were, 2 if it could not import |
 | `tester tests [--feature NAME]` | lists the tests with their numbers |
 | `tester tests show <id>` | shows a test's file |
-| `tester counts [--env] [--feature] [--since DATE]` | shows how each test has done |
+| `tester counts [--by test\|feature] [--env] [--feature] [--since DATE]` | shows how each test has done, counting a test once per run (its verdict is the worst of its checks), or with `--by feature` how often each feature's tests were played: RUNS, PLAYS (one per test per run) and FAILED |
 | `tester check` | checks the manifest |
 | `tester projects list \| add \| rename \| remove` | manages the list of projects the program knows (below) |
 | `tester menu` | opens the interactive menu (needs a terminal) |
@@ -70,7 +70,7 @@ The program keeps one small file, `projects.yaml`, in your config folder (`teste
 |---|---|
 | Projects | the known projects. `Enter` opens one, `r` sets a nickname, `x` forgets it |
 | Features, environments | each with its number of tests, and how many of them can run in that environment |
-| Run history | the runs of that feature in that environment. `Enter` opens one: its results, its diagnostic, and `d` shows or hides the test tool's detail |
+| Run history | the runs of that feature in that environment. `Enter` opens one: its results, its diagnostic, and `c` shows every check of a test that printed several, `d` shows or hides the test tool's detail |
 | Counts | each test's runs, passes and failures, and its last result |
 | Tests | the tests of the feature. `Enter` shows a test's code with line numbers |
 | Run all | asks first, with the real count (`Run 8 of 9 tests ... (1 skipped)`), then runs |

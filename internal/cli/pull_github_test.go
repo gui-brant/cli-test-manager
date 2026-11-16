@@ -83,7 +83,7 @@ func TestPullThroughTheRealAdapterAgainstAFakeGitHub(t *testing.T) {
 
 	p.do("history", "--source", "remote")
 	contains(t, "history", p.stdout(), "remote", "deployed", "FAIL", "PENDING")
-	p.do("history", "1")
+	p.do("history", "1", "--checks")
 	contains(t, "run 1", p.stdout(), "remote run 9001, attempt 1, commit abc9001", "signs in", "rejects a bad password")
 }
 

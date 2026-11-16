@@ -168,7 +168,13 @@ func (a *app) printSummary(m *core.Manifest, rep execute.Report) {
 			failed++
 		}
 	}
-	line := fmt.Sprintf("  environment %s, %s, %d failed", run.Environment, plural(len(run.Results), "result", "results"), failed)
+	// The run counts tests; a test that printed several checks counts once, and
+	// the checks are said beside it.
+	tests, failedTests := run.Counts()
+	line := fmt.Sprintf("  environment %s, %s, %d failed", run.Environment, plural(tests, "test", "tests"), failedTests)
+	if len(run.Results) != tests {
+		line += fmt.Sprintf(" (%s)", plural(len(run.Results), "check", "checks"))
+	}
 	if n := len(rep.Skipped); n > 0 {
 		line += fmt.Sprintf(", %s skipped (listed above)", plural(n, "test", "tests"))
 	}
@@ -181,7 +187,7 @@ func (a *app) printSummary(m *core.Manifest, rep execute.Report) {
 			continue
 		}
 		if shown == maxFailuresShown {
-			fmt.Fprintf(a.Stdout, "  ... and %d more failed results\n", failed-shown)
+			fmt.Fprintf(a.Stdout, "  ... and %d more failed checks\n", failed-shown)
 			break
 		}
 		shown++

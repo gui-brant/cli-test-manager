@@ -48,7 +48,7 @@ func TestImportingAFileRecordsItAsARunOfTheNetworkEnvironment(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit %d; stderr: %s", code, p.stderr())
 	}
-	contains(t, "stdout", p.stdout(), "Imported as run 1: 3 results, 1 failed (1 matched no test)", "Details: tester history 1")
+	contains(t, "stdout", p.stdout(), "Imported as run 1: 3 tests, 1 failed (1 matched no test)", "Details: tester history 1")
 
 	p.do("history", "1")
 	contains(t, "history 1", p.stdout(),
@@ -123,16 +123,23 @@ func TestStandardInputWithATestAndAFormat(t *testing.T) {
 	if code := p.do("import", "--env", "network", "--format", "tap", "--test", "login-flow", "-"); code != ExitOK {
 		t.Fatalf("exit %d; stderr: %s", code, p.stderr())
 	}
-	contains(t, "stdout", p.stdout(), "Imported as run 1: 2 results, 0 failed")
+	// Both checks belong to login-flow, so the run holds one test.
+	contains(t, "stdout", p.stdout(), "Imported as run 1: 1 test, 0 failed (2 checks)")
 	if strings.Contains(p.stdout(), "matched no test") {
 		t.Errorf("--test left results unmatched:\n%s", p.stdout())
 	}
 	p.do("history", "1")
-	// Both results belong to login-flow, and the moment of import is the clock's.
-	if n := strings.Count(p.stdout(), "login-flow"); n != 2 {
-		t.Errorf("login-flow appears %d times; want 2:\n%s", n, p.stdout())
+	contains(t, "history 1", p.stdout(), "checks 2 in 1 test, 0 failed", "#2 PASS login-flow 2 checks",
+		"when 2026-11-10 12:00", "Some tests printed several checks; only their failed ones are listed.",
+		"Show every check with: tester history 1 --checks")
+	if strings.Contains(p.stdout(), "p95 under 450ms") {
+		t.Errorf("a passing check is listed without --checks:\n%s", p.stdout())
 	}
-	contains(t, "history 1", p.stdout(), "when 2026-11-10 12:00")
+	p.do("history", "1", "--checks")
+	contains(t, "history 1 --checks", p.stdout(), "PASS p95 under 450ms", "PASS error rate under 1%")
+	if strings.Contains(p.stdout(), "Show every check with") {
+		t.Errorf("--checks still offers --checks:\n%s", p.stdout())
+	}
 }
 
 func TestWhenIsTheFilesTimeUnlessTheFlagSaysOtherwise(t *testing.T) {

@@ -127,13 +127,11 @@ not import, 130 cancelled. Importing records results; it does not judge them.
 		return ExitOK
 	}
 
-	failed := 0
-	for _, r := range rep.Run.Results {
-		if r.Status.Failed() {
-			failed++
-		}
+	tests, failed := rep.Run.Counts()
+	line := fmt.Sprintf("Imported as run %d: %s, %d failed", rep.RunID, plural(tests, "test", "tests"), failed)
+	if n := len(rep.Run.Results); n != tests {
+		line += fmt.Sprintf(" (%s)", plural(n, "check", "checks"))
 	}
-	line := fmt.Sprintf("Imported as run %d: %s, %d failed", rep.RunID, plural(len(rep.Run.Results), "result", "results"), failed)
 	if rep.Unmatched > 0 {
 		line += fmt.Sprintf(" (%d matched no test)", rep.Unmatched)
 	}

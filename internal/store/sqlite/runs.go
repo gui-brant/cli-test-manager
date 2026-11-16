@@ -36,12 +36,8 @@ func parseTime(s string) (time.Time, error) {
 // attempt) that is already stored replaces that run and keeps its ID.
 func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 	verdict := run.Verdict()
-	failed := 0
-	for _, r := range run.Results {
-		if r.Status.Failed() {
-			failed++
-		}
-	}
+	// The totals count tests, not checks: a file that prints 42 checks is one.
+	total, failed := run.Counts()
 
 	var id int64
 	err := s.writeTx(ctx, func(conn *sql.Conn) error {
@@ -57,7 +53,7 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 			string(run.Source), run.Environment, string(run.State),
 			formatTime(run.StartedAt), formatTime(run.FinishedAt), run.ExitCode,
 			run.ExternalID, run.Attempt, run.CommitSHA, run.Diagnostic, run.Detail,
-			string(verdict.Outcome), verdict.Reason, len(run.Results), failed,
+			string(verdict.Outcome), verdict.Reason, total, failed,
 			boolToInt(run.Dirty), string(run.Trigger),
 		}
 		if id != 0 {

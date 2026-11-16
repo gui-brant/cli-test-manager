@@ -122,7 +122,7 @@ func TestOpeningARunShowsItsPartsAndEscComesBackToTheSameRow(t *testing.T) {
 	mustContain(t, "history", m.View(), "Runs of birds in local", "> Run 1")
 
 	press(m, "up", "enter") // run 2, the failed one
-	mustContain(t, "run", m.View(), "Run 2  FAIL", "reason       1 of 2 results failed", "expected 3, got 4",
+	mustContain(t, "run", m.View(), "Run 2  FAIL", "reason       1 of 2 tests failed", "expected 3, got 4",
 		"Diagnostic:", "[t1] the command printed this")
 }
 
@@ -187,6 +187,57 @@ func TestALongRunScrollsAndTheDetailKeyDoesNotPageDown(t *testing.T) {
 		press(m, "up")
 	}
 	mustContain(t, "run", m.View(), "Run 1  PASS")
+}
+
+// A test that printed several checks is one row; only its failed check is
+// listed, and c shows every check and hides them again. A run where every test
+// printed one check has nothing to show, so c does nothing and is not offered.
+func TestCShowsEveryCheckOfATestThatPrintedSeveral(t *testing.T) {
+	m, _, save := historyMenu(t, twoEnvironments)
+	save(aRun("local", 0,
+		aResult("t1", "birds", core.StatusPass, ""),
+		aResult("t1", "birds", core.StatusFail, "expected 3, got 4"),
+		aResult("t1", "birds", core.StatusPass, "")))
+	toHistory(m)
+	press(m, "enter")
+
+	view := m.View()
+	mustContain(t, "run", view, "t1  3 checks, 1 failed", "expected 3, got 4",
+		"Some tests printed several checks; only their failed ones are listed. Press c to show every check.",
+		"c show every check")
+	// Two of the three checks have the same name here; the failing one is listed once.
+	if n := strings.Count(view, "FAIL"); n < 2 {
+		t.Errorf("the failed check is not listed under its test:\n%s", view)
+	}
+
+	press(m, "c")
+	shown := m.View()
+	if strings.Contains(shown, "Press c to show every check") {
+		t.Errorf("the hint stays after c:\n%s", shown)
+	}
+	if n := strings.Count(shown, "the t1 check"); n != 3 {
+		t.Errorf("every check should be listed after c; the name appears %d times:\n%s", n, shown)
+	}
+	mustContain(t, "run", shown, "c only the failed checks")
+
+	press(m, "c")
+	if strings.Contains(m.View(), "PASS  the t1 check") {
+		t.Errorf("c did not hide the passing checks again:\n%s", m.View())
+	}
+
+	// A run where every test printed one check has nothing for c to do.
+	m, _, save = historyMenu(t, twoEnvironments)
+	save(aRun("local", 0, aResult("t1", "birds", core.StatusPass, ""), aResult("t2", "birds", core.StatusPass, "")))
+	toHistory(m)
+	press(m, "enter")
+	plain := m.View()
+	press(m, "c")
+	if m.View() != plain {
+		t.Errorf("c changed a run with nothing hidden")
+	}
+	if strings.Contains(plain, "c show every check") || strings.Contains(plain, "Press c") {
+		t.Errorf("a run with nothing hidden offers c:\n%s", plain)
+	}
 }
 
 func TestQAndCtrlCLeaveFromTheHistoryAndRunScreens(t *testing.T) {

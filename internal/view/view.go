@@ -32,6 +32,17 @@ type Run struct {
 	// failed results. Empty when the run has none. It is long, so a view shows
 	// it only on request.
 	Detail string
+	// HiddenChecks is how many checks of tests that printed several are not
+	// listed in Results, because they passed. Zero when Options.Checks was set
+	// or every check is listed.
+	HiddenChecks int
+}
+
+// Options change what a run's view lists.
+type Options struct {
+	// Checks lists every check of a test that printed several. Without it only
+	// the failed ones are listed under the test.
+	Checks bool
 }
 
 // commitText says which commit a run was made against: the short commit and,
@@ -78,15 +89,44 @@ func toolsText(tools []core.Tool) string {
 // HasDetail says whether the run has tool detail to offer.
 func (r Run) HasDetail() bool { return r.Detail != "" }
 
-// Build makes the view of one run. id is the run's number, and loc the zone
-// the times are shown in (nil means the local zone).
+// HasHiddenChecks says whether some checks are left out of Results.
+func (r Run) HasHiddenChecks() bool { return r.HiddenChecks > 0 }
+
+// ChecksHint is the first line of the note that says some passing checks are
+// not listed. The command adds how to see them; the menu says which key to
+// press.
+const ChecksHint = "Some tests printed several checks; only their failed ones are listed."
+
+// Build makes the view of one run, listing only the failed checks of a test
+// that printed several. id is the run's number, and loc the zone the times are
+// shown in (nil means the local zone).
 func Build(d query.RunDetail, id int64, loc *time.Location) Run {
+	return BuildWith(d, id, loc, Options{})
+}
+
+// BuildWith is Build with options.
+func BuildWith(d query.RunDetail, id int64, loc *time.Location, opts Options) Run {
 	run := d.Run
+
+	// One row per test: the results are grouped into plays, each with one
+	// verdict, however many checks the test printed.
+	results := make([]core.Result, len(d.Results))
+	numbers := make(map[string]int)
+	for i, r := range d.Results {
+		results[i] = r.Result
+		if r.TestID != "" {
+			numbers[r.TestID] = r.Number
+		}
+	}
+	plays := core.Run{Results: results}.Plays()
 
 	var head strings.Builder
 	fmt.Fprintf(&head, "Run %d  %s\n", id, ResultWord(run.State, d.Verdict.Outcome))
 	if d.Verdict.Reason != "" {
 		fmt.Fprintf(&head, "  reason       %s\n", d.Verdict.Reason)
+	}
+	if checks, failed := len(results), failedChecks(results); checks != len(plays) {
+		fmt.Fprintf(&head, "  checks       %d in %s, %d failed\n", checks, plural(len(plays), "test", "tests"), failed)
 	}
 	fmt.Fprintf(&head, "  when         %s to %s\n", When(loc, run.StartedAt), When(loc, run.FinishedAt))
 	fmt.Fprintf(&head, "  source       %s, environment %s\n", run.Source, Dash(run.Environment))
@@ -110,29 +150,47 @@ func Build(d query.RunDetail, id int64, loc *time.Location) Run {
 		head.WriteString(toolsText(run.Tools))
 	}
 
-	var results strings.Builder
-	results.WriteString("Results:\n")
-	if len(d.Results) == 0 {
-		results.WriteString("  (none)\n")
+	var rows strings.Builder
+	rows.WriteString("Results:\n")
+	if len(plays) == 0 {
+		rows.WriteString("  (none)\n")
 	}
 	width := 0
-	for _, r := range d.Results {
-		width = max(width, len(Dash(r.TestID)))
+	for _, p := range plays {
+		width = max(width, len(Dash(p.TestID)))
 	}
-	for _, r := range d.Results {
+	hidden := 0
+	for _, p := range plays {
 		num := "-"
-		if r.Number > 0 {
-			num = fmt.Sprintf("#%d", r.Number)
+		if n := numbers[p.TestID]; p.TestID != "" && n > 0 {
+			num = fmt.Sprintf("#%d", n)
 		}
-		fmt.Fprintf(&results, "  %-4s %-5s %-*s  %s\n", num, strings.ToUpper(string(r.Status)), width, Dash(r.TestID), r.Name)
-		if strings.TrimSpace(r.Message) != "" {
-			fmt.Fprintln(&results, Indent(strings.TrimSpace(r.Message), "        "))
+		if len(p.Checks) == 1 {
+			// The usual case: one check is the whole test, shown as it always was.
+			c := p.Checks[0]
+			fmt.Fprintf(&rows, "  %-4s %-5s %-*s  %s\n", num, strings.ToUpper(string(p.Status)), width, Dash(p.TestID), c.Name)
+			if strings.TrimSpace(c.Message) != "" {
+				fmt.Fprintln(&rows, Indent(strings.TrimSpace(c.Message), "        "))
+			}
+			continue
+		}
+		fmt.Fprintf(&rows, "  %-4s %-5s %-*s  %s\n", num, strings.ToUpper(string(p.Status)), width, Dash(p.TestID), checksText(p))
+		for _, c := range p.Checks {
+			if !opts.Checks && !c.Status.Failed() {
+				hidden++
+				continue
+			}
+			fmt.Fprintf(&rows, "        %-5s %s\n", strings.ToUpper(string(c.Status)), c.Name)
+			if strings.TrimSpace(c.Message) != "" {
+				fmt.Fprintln(&rows, Indent(strings.TrimSpace(c.Message), "              "))
+			}
 		}
 	}
 
 	out := Run{
-		Header:  strings.TrimRight(head.String(), "\n"),
-		Results: strings.TrimRight(results.String(), "\n"),
+		Header:       strings.TrimRight(head.String(), "\n"),
+		Results:      strings.TrimRight(rows.String(), "\n"),
+		HiddenChecks: hidden,
 	}
 	if strings.TrimSpace(run.Diagnostic) != "" {
 		out.Diagnostic = "Diagnostic:\n" + Indent(run.Diagnostic, "  ")
@@ -141,6 +199,42 @@ func Build(d query.RunDetail, id int64, loc *time.Location) Run {
 		out.Detail = "Tool detail:\n" + Indent(run.Detail, "  ")
 	}
 	return out
+}
+
+// checksText summarises a test that printed several checks: how many, and how
+// many failed or were skipped.
+func checksText(p core.Play) string {
+	text := fmt.Sprintf("%d checks", len(p.Checks))
+	if n := p.FailedChecks(); n > 0 {
+		text += fmt.Sprintf(", %d failed", n)
+	}
+	skipped := 0
+	for _, c := range p.Checks {
+		if c.Status == core.StatusSkip {
+			skipped++
+		}
+	}
+	if skipped > 0 {
+		text += fmt.Sprintf(", %d skipped", skipped)
+	}
+	return text
+}
+
+func failedChecks(results []core.Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Status.Failed() {
+			n++
+		}
+	}
+	return n
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // ResultWord is how a run's state and outcome read in a list.

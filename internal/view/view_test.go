@@ -67,6 +67,71 @@ func TestBuildShowsTheCommitTriggerAndTools(t *testing.T) {
 	}
 }
 
+// A test that printed several checks is one row with its verdict and a count.
+// Only its failed checks are listed under it, with their messages; the passing
+// ones are counted as hidden until asked for. A test with one check, and a
+// result with no test, look as they always did.
+func TestBuildOneRowPerTestWithItsFailedChecks(t *testing.T) {
+	multi := func(name string, st core.Status, msg string) query.DetailResult {
+		r := result("big", name, st, msg, 3)
+		r.Feature = "f"
+		return r
+	}
+	d := query.RunDetail{
+		Run:     core.Run{Source: core.SourceLocal, Environment: "local", State: core.RunComplete, StartedAt: start, FinishedAt: finish},
+		Verdict: core.Verdict{Outcome: core.OutcomeFail, Reason: "1 of 3 tests failed"},
+		Results: []query.DetailResult{
+			result("solo", "the only check", core.StatusPass, "", 1),
+			multi("first", core.StatusPass, ""),
+			multi("second", core.StatusFail, "expected 401\ngot 200"),
+			multi("third", core.StatusSkip, "no network"),
+			result("", "an unlisted thing", core.StatusPass, "", 0),
+		},
+	}
+
+	got := Build(d, 4, est)
+	wantResults := "Results:\n" +
+		"  #1   PASS  solo  the only check\n" +
+		"  #3   FAIL  big   3 checks, 1 failed, 1 skipped\n" +
+		"        FAIL  second\n" +
+		"              expected 401\n" +
+		"              got 200\n" +
+		"  -    PASS  -     an unlisted thing"
+	if got.Results != wantResults {
+		t.Errorf("results:\n%s\nwant:\n%s", got.Results, wantResults)
+	}
+	if got.HiddenChecks != 2 || !got.HasHiddenChecks() {
+		t.Errorf("HiddenChecks = %d; want the passing and the skipped check (2)", got.HiddenChecks)
+	}
+	if !strings.Contains(got.Header, "\n  checks       5 in 3 tests, 1 failed") {
+		t.Errorf("header lacks the checks line:\n%s", got.Header)
+	}
+
+	all := BuildWith(d, 4, est, Options{Checks: true})
+	for _, want := range []string{"        PASS  first", "        FAIL  second", "        SKIP  third", "              no network"} {
+		if !strings.Contains(all.Results, want) {
+			t.Errorf("--checks results lack %q:\n%s", want, all.Results)
+		}
+	}
+	if all.HiddenChecks != 0 || all.HasHiddenChecks() {
+		t.Errorf("with every check listed HiddenChecks = %d; want 0", all.HiddenChecks)
+	}
+}
+
+// When every test printed one check there is nothing to hide, and the header
+// has no checks line.
+func TestBuildHasNoChecksLineOrHintWhenEveryTestPrintedOne(t *testing.T) {
+	d := query.RunDetail{
+		Run:     core.Run{Source: core.SourceLocal, State: core.RunComplete, StartedAt: start, FinishedAt: finish},
+		Verdict: core.Verdict{Outcome: core.OutcomePass},
+		Results: []query.DetailResult{result("a", "A", core.StatusPass, "", 1), result("b", "B", core.StatusPass, "", 2)},
+	}
+	got := Build(d, 1, est)
+	if strings.Contains(got.Header, "checks ") || got.HasHiddenChecks() {
+		t.Errorf("header %q, hidden %d; want neither a checks line nor hidden checks", got.Header, got.HiddenChecks)
+	}
+}
+
 // A failed run with everything a view can hold, compared as a whole.
 func TestBuildAFailedRunWithEveryPart(t *testing.T) {
 	d := query.RunDetail{

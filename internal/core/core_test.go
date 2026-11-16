@@ -2,10 +2,12 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -160,7 +162,7 @@ func TestVerdictShowsTheRealCause(t *testing.T) {
 		{
 			"failed tests keep their own reason",
 			Run{State: RunComplete, Results: []Result{{Status: StatusFail}}, Diagnostic: "noise"},
-			"1 of 1 results failed",
+			"1 of 1 tests failed",
 		},
 	}
 	for _, c := range cases {
@@ -204,6 +206,90 @@ func TestTailDiagnostic(t *testing.T) {
 	multi := strings.Repeat("日", MaxDiagnosticBytes)
 	if g := TailDiagnostic(multi); !utf8.ValidString(g) {
 		t.Error("cutting must not split a multi-byte character")
+	}
+}
+
+// A test that printed many checks is one play with one verdict, the worst of
+// its checks. Results with no test cannot be grouped, so each is a play.
+func TestPlaysGroupChecksByTest(t *testing.T) {
+	ok := func(id, name string) Result {
+		return Result{TestID: id, Feature: "f", Name: name, Status: StatusPass, Duration: time.Second}
+	}
+	bad := func(id, name string) Result {
+		return Result{TestID: id, Feature: "f", Name: name, Status: StatusFail, Duration: time.Second}
+	}
+	run := Run{Results: []Result{
+		ok("a", "one"), ok("b", "solo"), bad("a", "two"), ok("a", "three"),
+		{Name: "stray 1", Status: StatusPass}, {Name: "stray 2", Status: StatusFail},
+	}}
+	plays := run.Plays()
+
+	var got []string
+	for _, p := range plays {
+		got = append(got, fmt.Sprintf("%s:%s:%d", p.TestID, p.Status, len(p.Checks)))
+	}
+	// Tests in the order each first appeared; each stray result stays in place.
+	if want := []string{"a:fail:3", "b:pass:1", ":pass:1", ":fail:1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("plays = %v; want %v", got, want)
+	}
+	if p := plays[0]; p.Feature != "f" || p.Duration != 3*time.Second || p.FailedChecks() != 1 || !p.Failed() {
+		t.Errorf("play a = %+v", p)
+	}
+	if plays[0].Checks[0].Name != "one" || plays[0].Checks[2].Name != "three" {
+		t.Errorf("checks lost their order: %+v", plays[0].Checks)
+	}
+	if total, failed := run.Counts(); total != 4 || failed != 2 {
+		t.Errorf("Counts = %d, %d; want 4 tests, 2 failed", total, failed)
+	}
+	if total, failed := (Run{}).Counts(); total != 0 || failed != 0 {
+		t.Errorf("an empty run counts %d, %d", total, failed)
+	}
+}
+
+func TestTheWorstStatusOfTheChecksIsTheVerdict(t *testing.T) {
+	r := func(s ...Status) []Result {
+		var out []Result
+		for _, st := range s {
+			out = append(out, Result{Status: st})
+		}
+		return out
+	}
+	cases := []struct {
+		name   string
+		checks []Result
+		want   Status
+	}{
+		{"all pass", r(StatusPass, StatusPass), StatusPass},
+		{"a fail among passes", r(StatusPass, StatusFail, StatusPass), StatusFail},
+		{"an error beats a fail", r(StatusFail, StatusError, StatusPass), StatusError},
+		{"a pass among skips passes", r(StatusSkip, StatusPass, StatusSkip), StatusPass},
+		{"all skipped is a skip", r(StatusSkip, StatusSkip), StatusSkip},
+		{"a fail among skips fails", r(StatusSkip, StatusFail), StatusFail},
+		{"no checks is a skip", nil, StatusSkip},
+	}
+	for _, c := range cases {
+		if got := WorstStatus(c.checks); got != c.want {
+			t.Errorf("%s: %q; want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The run counts tests: one file printing 42 checks with one failing is one
+// failed test, not 1 of 42.
+func TestARunWithManyChecksInOneTestCountsOneTest(t *testing.T) {
+	var results []Result
+	for i := 0; i < 41; i++ {
+		results = append(results, Result{TestID: "big", Feature: "f", Status: StatusPass})
+	}
+	results = append(results, Result{TestID: "big", Feature: "f", Status: StatusFail})
+	run := Run{State: RunComplete, Results: results}
+
+	if v := run.Verdict(); v.Outcome != OutcomeFail || v.Reason != "1 of 1 tests failed" {
+		t.Errorf("verdict %+v; want fail, 1 of 1 tests failed", v)
+	}
+	run.Results[41].Status = StatusPass
+	if v := run.Verdict(); v.Outcome != OutcomePass {
+		t.Errorf("42 passing checks: %+v; want a pass", v)
 	}
 }
 
@@ -258,7 +344,10 @@ func (fakeStore) GetRun(context.Context, int64) (Run, error)                 { r
 func (fakeStore) FindByKey(context.Context, string, int) (Run, error)        { return Run{}, ErrNotFound }
 func (fakeStore) ListRuns(context.Context, RunFilter) ([]RunSummary, error)  { return nil, nil }
 func (fakeStore) TestStats(context.Context, StatsFilter) ([]TestStat, error) { return nil, nil }
-func (fakeStore) Close() error                                               { return nil }
+func (fakeStore) FeatureStats(context.Context, StatsFilter) ([]FeatureStat, error) {
+	return nil, nil
+}
+func (fakeStore) Close() error { return nil }
 
 func (fakeCreds) Get(context.Context, string) (string, error) { return "", ErrNotFound }
 

@@ -129,13 +129,19 @@ func (s *historyScreen) keys() string {
 type runScreen struct {
 	sel        selection
 	id         int64
+	d          query.RunDetail
 	parts      view.Run
 	showDetail bool
+	// showChecks lists every check of a test that printed several; hasHidden says
+	// there are any such checks to show (c does nothing otherwise).
+	showChecks bool
+	hasHidden  bool
 	scroll     scroller
 }
 
 func newRunScreen(sel selection, id int64) (*runScreen, error) {
 	var parts view.Run
+	var detail query.RunDetail
 	err := sel.withHistory(func(q *query.Service) error {
 		if q == nil {
 			return fmt.Errorf("run %d not found: there is no history yet", id)
@@ -147,18 +153,22 @@ func newRunScreen(sel selection, id int64) (*runScreen, error) {
 		if err != nil {
 			return err
 		}
+		detail = d
 		parts = view.Build(d, id, sel.deps.Loc)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &runScreen{sel: sel, id: id, parts: parts, scroll: newScroller()}, nil
+	return &runScreen{sel: sel, id: id, d: detail, parts: parts, hasHidden: parts.HasHiddenChecks(), scroll: newScroller()}, nil
 }
 
 // text is everything the screen shows, in the order of the command.
 func (s *runScreen) text() string {
 	chunks := []string{s.parts.Header, s.parts.Results}
+	if s.hasHidden && !s.showChecks {
+		chunks = append(chunks, view.ChecksHint+" Press c to show every check.")
+	}
 	if s.parts.Diagnostic != "" {
 		chunks = append(chunks, s.parts.Diagnostic)
 	}
@@ -182,6 +192,13 @@ func (s *runScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 		}
 		return s, nav{}, nil
 	}
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "c" {
+		if s.hasHidden {
+			s.showChecks = !s.showChecks
+			s.parts = view.BuildWith(s.d, s.id, s.sel.deps.Loc, view.Options{Checks: s.showChecks})
+		}
+		return s, nav{}, nil
+	}
 	return s, nav{}, s.scroll.update(msg)
 }
 
@@ -195,6 +212,13 @@ func (s *runScreen) view(width, height int) string {
 
 func (s *runScreen) keys() string {
 	keys := "↑/↓ scroll · pgup/pgdn page"
+	switch {
+	case !s.hasHidden:
+	case s.showChecks:
+		keys += " · c only the failed checks"
+	default:
+		keys += " · c show every check"
+	}
 	switch {
 	case !s.parts.HasDetail():
 	case s.showDetail:

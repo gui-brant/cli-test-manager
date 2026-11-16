@@ -545,8 +545,10 @@ func TestFailuresThatTheResultsDoNotExplain(t *testing.T) {
 			if v.Outcome != core.OutcomeFail {
 				t.Errorf("verdict %+v; want fail", v)
 			}
-			// The reason counts failures; the cause of each is in its own result.
-			if want := fmt.Sprintf("1 of %d results failed", c.wantBefore+1); v.Reason != want {
+			// The reason counts failed tests: one test ran, whatever number of
+			// checks it printed before the failure was added. The cause is in its
+			// own result.
+			if want := "1 of 1 tests failed"; v.Reason != want {
 				t.Errorf("reason %q; want %q", v.Reason, want)
 			}
 		})
@@ -667,8 +669,12 @@ func TestAFailureTheResultsDoExplainAddsNothing(t *testing.T) {
 	if run.ExitCode != 0 || run.Diagnostic != "" {
 		t.Errorf("exit code %d, diagnostic %q; a non-zero exit that a failing result explains adds nothing", run.ExitCode, run.Diagnostic)
 	}
-	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "1 of 2 results failed" {
+	// A pass and a fail printed by one test: one failed test, two checks.
+	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "1 of 1 tests failed" {
 		t.Errorf("verdict %+v", v)
+	}
+	if total, failed := run.Counts(); total != 1 || failed != 1 {
+		t.Errorf("Counts = %d, %d; want 1 test, 1 failed", total, failed)
 	}
 }
 
@@ -689,7 +695,7 @@ func TestACrashDoesNotStopTheOtherTests(t *testing.T) {
 	if len(run.Results) != 2 || run.Results[0].Status != core.StatusError || run.Results[1].Status != core.StatusPass {
 		t.Fatalf("results %+v; want the crash, then the passing test", run.Results)
 	}
-	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "1 of 2 results failed" || run.ExitCode != 2 {
+	if v := run.Verdict(); v.Outcome != core.OutcomeFail || v.Reason != "1 of 2 tests failed" || run.ExitCode != 2 {
 		t.Errorf("verdict %+v, exit code %d; want a failed run that counts the crash as a failure", v, run.ExitCode)
 	}
 }
@@ -774,7 +780,7 @@ func TestProgressEvents(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("events:\n got  %+v\n want %+v", got, want)
 	}
-	if last := f.events[len(f.events)-1]; last.Reason != "1 of 1 results failed" {
+	if last := f.events[len(f.events)-1]; last.Reason != "1 of 1 checks failed" {
 		t.Errorf("finished reason %q", last.Reason)
 	}
 }

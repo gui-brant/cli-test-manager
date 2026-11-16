@@ -181,6 +181,96 @@ func (r Run) Features() []string {
 	return out
 }
 
+// Play is one test's part of a run: everything the test printed, with one
+// verdict. A test file prints as many checks as it has; it counts once. A
+// result that belongs to no listed test cannot be grouped, so each is a play of
+// its own, with an empty TestID.
+type Play struct {
+	// TestID and Feature are the test's, as recorded when the run was saved.
+	TestID  string
+	Feature string
+	// Status is the worst of the checks: error, then fail, then pass; skip only
+	// when every check was skipped.
+	Status Status
+	// Checks are the test's results in the order they were printed.
+	Checks []Result
+	// Duration is the checks' durations added up.
+	Duration time.Duration
+}
+
+// Failed reports whether the play counts against the run.
+func (p Play) Failed() bool { return p.Status.Failed() }
+
+// FailedChecks is how many of the checks failed or errored.
+func (p Play) FailedChecks() int {
+	n := 0
+	for _, c := range p.Checks {
+		if c.Status.Failed() {
+			n++
+		}
+	}
+	return n
+}
+
+// WorstStatus is the verdict of a set of checks: error if any errored,
+// otherwise fail if any failed, otherwise pass if any passed, otherwise skip.
+// No checks at all is a skip.
+func WorstStatus(checks []Result) Status {
+	var fail, pass bool
+	for _, c := range checks {
+		switch c.Status {
+		case StatusError:
+			return StatusError
+		case StatusFail:
+			fail = true
+		case StatusPass:
+			pass = true
+		}
+	}
+	switch {
+	case fail:
+		return StatusFail
+	case pass:
+		return StatusPass
+	}
+	return StatusSkip
+}
+
+// Plays groups the run's results into one play per test, in the order each test
+// first appears. Results with no test are plays of their own, in place.
+func (r Run) Plays() []Play {
+	var plays []Play
+	at := make(map[string]int) // test id -> index in plays
+	for _, res := range r.Results {
+		i, seen := at[res.TestID]
+		if res.TestID == "" || !seen {
+			plays = append(plays, Play{TestID: res.TestID, Feature: res.Feature})
+			i = len(plays) - 1
+			if res.TestID != "" {
+				at[res.TestID] = i
+			}
+		}
+		plays[i].Checks = append(plays[i].Checks, res)
+		plays[i].Duration += res.Duration
+	}
+	for i := range plays {
+		plays[i].Status = WorstStatus(plays[i].Checks)
+	}
+	return plays
+}
+
+// Counts is how many tests the run played and how many of them failed. A test
+// that printed many checks counts once.
+func (r Run) Counts() (total, failed int) {
+	plays := r.Plays()
+	for _, p := range plays {
+		if p.Failed() {
+			failed++
+		}
+	}
+	return len(plays), failed
+}
+
 // Outcome is the overall result of a run.
 type Outcome string
 
@@ -204,8 +294,9 @@ type Verdict struct {
 // Verdict decides the run's overall outcome. In order:
 //
 //  1. A pending or expired run has no verdict (undetermined).
-//  2. Any failed or errored result fails the run, with the reason "N of M
-//     results failed". Each failure's own cause is in its result.
+//  2. Any failed or errored test fails the run, with the reason "N of M tests
+//     failed" (a test is one test file's worth of checks: see Plays). Each
+//     failure's own cause is in its result.
 //  3. A non-zero exit code from the command fails the run, even if every
 //     parsed result passed (a crash after the last test must not look green).
 //  4. A run with no results at all fails with "no results", so a command that
@@ -221,17 +312,12 @@ func (r Run) Verdict() Verdict {
 	case RunExpired:
 		return Verdict{Outcome: OutcomeUndetermined, Reason: "results expired"}
 	}
-	failed := 0
-	for _, res := range r.Results {
-		if res.Status.Failed() {
-			failed++
-		}
-	}
-	// Failed results come first: a count says what happened to the whole run,
-	// and each failure's own cause is in its result. Picking one failure's cause
-	// as the run's reason would hide the others.
+	total, failed := r.Counts()
+	// Failed tests come first: a count says what happened to the whole run, and
+	// each failure's own cause is in its result. Picking one failure's cause as
+	// the run's reason would hide the others.
 	if failed > 0 {
-		return Verdict{Outcome: OutcomeFail, Reason: fmt.Sprintf("%d of %d results failed", failed, len(r.Results))}
+		return Verdict{Outcome: OutcomeFail, Reason: fmt.Sprintf("%d of %d tests failed", failed, total)}
 	}
 	if r.ExitCode != 0 {
 		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr(fmt.Sprintf("command exited with code %d", r.ExitCode))}

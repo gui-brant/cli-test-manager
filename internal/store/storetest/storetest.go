@@ -6,6 +6,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,6 +34,8 @@ func Run(t *testing.T, open Open) {
 		{"listing filters", testListFilters},
 		{"summaries carry the stored verdict and counts", testSummaryFields},
 		{"test stats", testTestStats},
+		{"a test counts once per run, by the worst of its checks", testTestStatsCountOncePerRun},
+		{"feature stats count runs, plays and failed plays", testFeatureStats},
 		{"large and unusual text round-trips", testLargeAndUnicode},
 		{"a cancelled context is an error", testCancelledContext},
 		{"a closed store is an error", testClosedStore},
@@ -436,6 +439,110 @@ func testTestStats(t *testing.T, s core.Store) {
 	}
 }
 
+// checks makes n results of one test with the given statuses.
+func checks(testID, feature string, statuses ...core.Status) []core.Result {
+	var out []core.Result
+	for i, st := range statuses {
+		out = append(out, result(testID, feature, fmt.Sprintf("%s check %d", testID, i+1), st))
+	}
+	return out
+}
+
+// A test file that prints many checks counts once per run. Its verdict in a run
+// is the worst of its checks, and the four counts add up to the runs.
+func testTestStatsCountOncePerRun(t *testing.T, s core.Store) {
+	P, F, E, K := core.StatusPass, core.StatusFail, core.StatusError, core.StatusSkip
+	runs := []struct {
+		hours   time.Duration
+		results []core.Result
+	}{
+		{0, checks("a", "f", P, P, P)}, // pass
+		{1, append(checks("a", "f", P, P, P, P, F), result("", "", "unlisted", core.StatusFail))}, // fail; the unlisted result is ignored
+		{2, checks("a", "f", K, K)},    // skip
+		{3, checks("a", "f", F, E, P)}, // error beats fail
+	}
+	for _, r := range runs {
+		save(t, s, local("local", t0.Add(r.hours*time.Hour), r.results...))
+	}
+
+	stats, err := s.TestStats(ctx, core.StatsFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("%d tests; want only a (an unlisted result is not counted): %+v", len(stats), stats)
+	}
+	a := stats[0]
+	if a.Runs != 4 || a.Passed != 1 || a.Failed != 1 || a.Errored != 1 || a.Skipped != 1 {
+		t.Errorf("a: runs %d, pass %d, fail %d, error %d, skip %d; want 4 runs, 1 of each",
+			a.Runs, a.Passed, a.Failed, a.Errored, a.Skipped)
+	}
+	if a.Passed+a.Failed+a.Errored+a.Skipped != a.Runs {
+		t.Errorf("the counts do not add up to the runs: %+v", a)
+	}
+	if a.LastStatus != core.StatusError || !a.LastRunAt.Equal(t0.Add(3*time.Hour)) {
+		t.Errorf("last %q at %v; want error at the latest run", a.LastStatus, a.LastRunAt)
+	}
+
+	// A run's own totals count tests too.
+	sums, err := s.ListRuns(ctx, core.RunFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sum := range sums {
+		wantTotal := 1
+		if sum.StartedAt.Equal(t0.Add(1 * time.Hour)) {
+			wantTotal = 2 // a, and the unlisted result as a play of its own
+		}
+		if sum.Total != wantTotal {
+			t.Errorf("run at %v: total %d; want %d tests", sum.StartedAt, sum.Total, wantTotal)
+		}
+	}
+}
+
+func testFeatureStats(t *testing.T, s core.Store) {
+	P, F := core.StatusPass, core.StatusFail
+	save(t, s, local("local", t0, append(append(checks("a", "f1", P, P, P), checks("b", "f1", F)...), checks("c", "f2", P)...)...))
+	save(t, s, local("deployed", t0.Add(2*time.Hour), checks("a", "f1", P)...))
+	save(t, s, local("local", t0.Add(4*time.Hour), append(checks("d", "", P), result("", "", "unlisted", F))...)) // no feature, no test
+
+	byFeature := func(stats []core.FeatureStat) map[string]core.FeatureStat {
+		m := map[string]core.FeatureStat{}
+		for _, st := range stats {
+			m[st.Feature] = st
+		}
+		return m
+	}
+	all, err := s.FeatureStats(ctx, core.StatsFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].Feature != "f1" || all[1].Feature != "f2" {
+		t.Fatalf("features %+v; want f1 then f2 (results with no feature are not counted)", all)
+	}
+	got := byFeature(all)
+	// f1: a and b in run 1, a again in run 2 -> 2 runs, 3 plays, 1 failed. a's three checks are one play.
+	if f1 := got["f1"]; f1.Runs != 2 || f1.Plays != 3 || f1.Failed != 1 || !f1.LastRunAt.Equal(t0.Add(2*time.Hour)) {
+		t.Errorf("f1 = %+v; want 2 runs, 3 plays, 1 failed, last at the second run", f1)
+	}
+	if f2 := got["f2"]; f2.Runs != 1 || f2.Plays != 1 || f2.Failed != 0 {
+		t.Errorf("f2 = %+v; want 1 run, 1 play, 0 failed", f2)
+	}
+
+	local, _ := s.FeatureStats(ctx, core.StatsFilter{Environment: "local"})
+	if g := byFeature(local); g["f1"].Runs != 1 || g["f1"].Plays != 2 {
+		t.Errorf("local only: f1 = %+v; want 1 run, 2 plays", g["f1"])
+	}
+	only, _ := s.FeatureStats(ctx, core.StatsFilter{Feature: "f2"})
+	if len(only) != 1 || only[0].Feature != "f2" {
+		t.Errorf("feature filter: %+v; want only f2", only)
+	}
+	since, _ := s.FeatureStats(ctx, core.StatsFilter{Since: t0.Add(time.Hour)})
+	if g := byFeature(since); len(g) != 1 || g["f1"].Runs != 1 || g["f1"].Plays != 1 {
+		t.Errorf("since: %+v; want only the second run of f1", since)
+	}
+}
+
 func testLargeAndUnicode(t *testing.T, s core.Store) {
 	run := local("local", t0, core.Result{TestID: "big", Feature: "f", Name: "日本語 ação", Status: core.StatusFail, Message: strings.Repeat("日本", 4096)})
 	run.Diagnostic = strings.Repeat("line of output\n", 2000)
@@ -459,6 +566,10 @@ func testCancelledContext(t *testing.T, s core.Store) {
 		"FindByKey": func() error { _, err := s.FindByKey(cancelled, "9001", 1); return err },
 		"ListRuns":  func() error { _, err := s.ListRuns(cancelled, core.RunFilter{}); return err },
 		"TestStats": func() error { _, err := s.TestStats(cancelled, core.StatsFilter{}); return err },
+		"FeatureStats": func() error {
+			_, err := s.FeatureStats(cancelled, core.StatsFilter{})
+			return err
+		},
 	}
 	for name, call := range calls {
 		if err := call(); err == nil {

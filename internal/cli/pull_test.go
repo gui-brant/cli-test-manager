@@ -89,8 +89,14 @@ func TestPullStoresNewRunsAndHistoryShowsThemAsRemote(t *testing.T) {
 	p.do("history", "--source", "remote")
 	contains(t, "history", p.stdout(), "remote", "deployed", "FAIL")
 	p.do("history", "2")
+	// login-flow printed two checks: it is one failed test, with its failing check listed.
 	contains(t, "run 2", p.stdout(), "Run 2", "source remote, environment deployed", "remote run 9002, attempt 1, commit abc9002",
-		"login-flow", "signs in", "rejects a bad password", "expected 401, got 200")
+		"login-flow 2 checks, 1 failed", "rejects a bad password", "expected 401, got 200")
+	if strings.Contains(p.stdout(), "signs in") {
+		t.Errorf("a passing check is listed without --checks:\n%s", p.stdout())
+	}
+	p.do("history", "2", "--checks")
+	contains(t, "run 2 --checks", p.stdout(), "signs in", "rejects a bad password")
 	for _, out := range []string{p.stdout(), p.stderr()} {
 		if strings.Contains(out, ciToken) {
 			t.Errorf("the token is in the output:\n%s", out)

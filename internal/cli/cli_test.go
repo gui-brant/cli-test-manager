@@ -247,7 +247,7 @@ func TestRunThatPasses(t *testing.T) {
 	}
 	contains(t, "stdout", p.stdout(),
 		"[1/3] users-table ... ok", "[2/3] login-flow ... ok", "[3/3] note-create ... ok",
-		"Run 1: PASSED", "environment local, 4 results, 0 failed", "Details: tester history 1")
+		"Run 1: PASSED", "environment local, 3 tests, 0 failed (4 checks)", "Details: tester history 1")
 	if p.stderr() != "" {
 		t.Errorf("stderr: %s", p.stderr())
 	}
@@ -257,7 +257,7 @@ func TestRunThatPasses(t *testing.T) {
 		t.Fatalf("history exit %d", code)
 	}
 	contains(t, "history", p.stdout(), "ID WHEN SOURCE ENV RESULT FAILED FEATURES REASON",
-		"1 2026-11-10 12:00:00 local local PASS 0/4 accounts,notes")
+		"1 2026-11-10 12:00:00 local local PASS 0/3 accounts,notes")
 }
 
 func TestRunThatFails(t *testing.T) {
@@ -270,8 +270,8 @@ func TestRunThatFails(t *testing.T) {
 		t.Fatalf("exit %d; want %d", code, ExitFailed)
 	}
 	contains(t, "stdout", p.stdout(),
-		"[1/1] login-flow ... FAILED: 1 of 1 results failed",
-		"Run 1: FAILED (1 of 1 results failed)",
+		"[1/1] login-flow ... FAILED: 1 of 1 checks failed",
+		"Run 1: FAILED (1 of 1 tests failed)",
 		"FAIL #2 login-flow rejects a bad password: expected 401, got 200")
 }
 
@@ -488,7 +488,7 @@ func TestHistoryListAndDetail(t *testing.T) {
 	if i2, i1 := strings.Index(out, "\n2 "), strings.Index(out, "\n1 "); i2 < 0 || i1 < 0 || i2 > i1 {
 		t.Errorf("runs are not newest first:\n%s", out)
 	}
-	contains(t, "history", out, "2 2026-11-10 12:00:02 local local FAIL 1/1 accounts 1 of 1 results failed")
+	contains(t, "history", out, "2 2026-11-10 12:00:02 local local FAIL 1/1 accounts 1 of 1 tests failed")
 
 	p.do("history", "--limit", "1")
 	if strings.Contains(p.stdout(), "\n1 ") || !strings.Contains(p.stdout(), "2026-11-10 12:00:02") {
@@ -510,7 +510,7 @@ func TestHistoryListAndDetail(t *testing.T) {
 		t.Fatalf("history 2: exit %d; %s", code, p.stderr())
 	}
 	contains(t, "run detail", p.stdout(),
-		"Run 2 FAIL", "reason 1 of 1 results failed", "source local, environment local",
+		"Run 2 FAIL", "reason 1 of 1 tests failed", "source local, environment local",
 		"Results:", "#2 FAIL login-flow rejects a bad password", "expected 401, got 200")
 
 	if code := p.do("history", "99"); code != ExitError {
@@ -531,7 +531,7 @@ func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 	if code := p.do("run", "--env", "local", "--test", "users-table"); code != ExitFailed {
 		t.Fatalf("exit %d", code)
 	}
-	contains(t, "summary", p.stdout(), "Run 1: FAILED (1 of 1 results failed)", "ERROR #1 users-table Users table checks: exited with code 2: kaboom")
+	contains(t, "summary", p.stdout(), "Run 1: FAILED (1 of 1 tests failed)", "ERROR #1 users-table Users table checks: exited with code 2: kaboom")
 
 	p.do("history", "1")
 	contains(t, "detail", p.stdout(), "exit code 2", "Diagnostic:", "[users-table] exited with code 2: kaboom", "while loading the schema")
@@ -549,7 +549,7 @@ func TestRunDetailShowsTheDiagnostic(t *testing.T) {
 
 	// The list does not pick one failure's cause: it counts, and points at the details.
 	p.do("history")
-	contains(t, "list", p.stdout(), "1 of 1 results failed; details: tester history 1")
+	contains(t, "list", p.stdout(), "1 of 1 tests failed; details: tester history 1")
 }
 
 // The test tool's own detail (stack traces, error objects) is long, so a run's
@@ -605,7 +605,8 @@ func TestHelpExplainsWhatDetailIsFor(t *testing.T) {
 	p.do("history", "-h")
 	contains(t, "history -h", p.stderr(),
 		`What "history <run number>" shows, in order:`,
-		"Results every result", "Diagnostic what the commands themselves printed",
+		"Results one row per test, with its verdict", "--checks lists every check",
+		"Diagnostic what the commands themselves printed",
 		"Tool detail only with --detail",
 		"-detail", "stack traces, error objects", "hidden unless asked for")
 	if n := strings.Count(p.stderr(), "shows, in order"); n != 1 {
@@ -696,7 +697,7 @@ func TestCounts(t *testing.T) {
 	}
 	out := p.stdout()
 	contains(t, "counts", out, "# ID NAME RUNS PASS FAIL ERROR SKIP LAST LAST RUN",
-		"1 users-table Users table checks 1 2 0 0 0 PASS", "2 login-flow Login flow 2 1 1 0 0 FAIL", "3 note-create Create a note 1 1 0 0 0 PASS")
+		"1 users-table Users table checks 1 1 0 0 0 PASS", "2 login-flow Login flow 2 1 1 0 0 FAIL", "3 note-create Create a note 1 1 0 0 0 PASS")
 	if i1, i2 := strings.Index(out, "1 users-table"), strings.Index(out, "2 login-flow"); i1 > i2 {
 		t.Errorf("counts are not in manifest order:\n%s", out)
 	}
@@ -711,6 +712,66 @@ func TestCounts(t *testing.T) {
 	contains(t, "counts", p.stdout(), "login-flow")
 	if code := p.do("counts", "--since", "nonsense"); code != ExitError {
 		t.Errorf("--since nonsense: exit %d", code)
+	}
+}
+
+// The feature counter: how often each feature's tests were played. A test
+// counts once per run, whatever number of checks it printed.
+func TestCountsByFeature(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.do("run", "--env", "local") // run 1: users-table (2 checks), login-flow, note-create
+	p.runner.reply = func(int, core.Invocation) (core.Output, error) {
+		return core.Output{Report: []byte(failingHTTP)}, nil
+	}
+	p.do("run", "--env", "local", "--test", "login-flow") // run 2: login-flow fails
+
+	if code := p.do("counts", "--by", "feature"); code != ExitOK {
+		t.Fatalf("exit %d; %s", code, p.stderr())
+	}
+	contains(t, "counts --by feature", p.stdout(), "FEATURE TESTS RUNS PLAYS FAILED LAST RUN",
+		"accounts 2 2 3 1 2026-11-10 12:00:02", // login-flow in both runs, users-table in the first
+		"notes 1 1 1 0 2026-11-10 12:00:00")
+
+	// A feature that was not played in the chosen environment shows zeros.
+	p.do("counts", "--by", "feature", "--env", "deployed")
+	contains(t, "deployed", p.stdout(), "accounts 2 0 0 0 -", "notes 1 0 0 0 -")
+
+	p.do("counts", "--by", "feature", "--feature", "notes")
+	if o := p.stdout(); !strings.Contains(o, "notes") || strings.Contains(o, "accounts") {
+		t.Errorf("--feature notes:\n%s", o)
+	}
+	p.do("counts", "--by", "feature", "--since", "2026-11-11")
+	contains(t, "since", p.stdout(), "accounts 2 0 0 0 -")
+}
+
+func TestCountsByRejectsWhatItDoesNotKnow(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.do("run", "--env", "local", "--feature", "notes", "--yes")
+	if code := p.do("counts", "--by", "cron"); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), `--by must be test or feature, not "cron"`)
+	if code := p.do("counts", "--by", "feature", "--feature", "nope"); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), `feature "nope" is not defined`)
+
+	p.do("counts", "-h")
+	contains(t, "counts -h", p.stderr()+p.stdout(), "--by feature", "PLAYS", "however many checks it")
+}
+
+func TestHistoryChecksNeedsARunNumber(t *testing.T) {
+	p := newProject(t, twoEnvironments)
+	p.do("run", "--env", "local", "--feature", "notes", "--yes")
+	if code := p.do("history", "--checks"); code != ExitError {
+		t.Errorf("exit %d; want %d", code, ExitError)
+	}
+	contains(t, "stderr", p.stderr(), "--checks shows one run in full")
+	// With a run number, before or after it.
+	for _, args := range [][]string{{"history", "--checks", "1"}, {"history", "1", "--checks"}} {
+		if code := p.do(args...); code != ExitOK {
+			t.Errorf("%v: exit %d; %s", args, code, p.stderr())
+		}
 	}
 }
 

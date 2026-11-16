@@ -41,6 +41,10 @@ type Store interface {
 	// TestStats returns per-test counts for the "view counts" screen.
 	TestStats(ctx context.Context, filter StatsFilter) ([]TestStat, error)
 
+	// FeatureStats returns per-feature counts: how many runs and how many test
+	// plays each feature had. Only features that were played appear.
+	FeatureStats(ctx context.Context, filter StatsFilter) ([]FeatureStat, error)
+
 	// Close releases the connection.
 	Close() error
 }
@@ -84,7 +88,10 @@ type StatsFilter struct {
 	Since       time.Time
 }
 
-// TestStat is the history of one test across runs.
+// TestStat is the history of one test across runs. A test counts once per run,
+// whatever number of checks it printed there: its verdict in that run is the
+// worst of its checks (see Play), so Passed, Failed, Errored and Skipped add up
+// to Runs.
 type TestStat struct {
 	TestID     string
 	Name       string
@@ -95,7 +102,20 @@ type TestStat struct {
 	Errored    int
 	Skipped    int
 	LastRunAt  time.Time
-	LastStatus Status
+	LastStatus Status // the test's verdict in its most recent run
+}
+
+// FeatureStat is the history of one feature: how often its tests were played.
+type FeatureStat struct {
+	Feature string
+	// Runs is how many runs played at least one of the feature's tests.
+	Runs int
+	// Plays is how many times the feature's tests were played: one for each test
+	// in each run.
+	Plays int
+	// Failed is how many of those plays failed or errored.
+	Failed    int
+	LastRunAt time.Time
 }
 
 // ---------------------------------------------------------------------------

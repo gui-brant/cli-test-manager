@@ -97,6 +97,57 @@ func (s *Service) Counts(ctx context.Context, m *core.Manifest, f core.StatsFilt
 	return rows, nil
 }
 
+// FeatureRow is one feature's history.
+type FeatureRow struct {
+	core.FeatureStat
+	// Tests is how many tests the manifest lists in the feature.
+	Tests int
+}
+
+// Features returns how often each feature's tests were played. Every feature
+// the manifest lists comes first, by name, with zeros when it was never played
+// (and `general` when some test belongs to it); features that appear in history
+// but are no longer listed follow, by name.
+func (s *Service) Features(ctx context.Context, m *core.Manifest, f core.StatsFilter) ([]FeatureRow, error) {
+	stats, err := s.Store.FeatureStats(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	played := make(map[string]core.FeatureStat, len(stats))
+	for _, st := range stats {
+		played[st.Feature] = st
+	}
+	tests := make(map[string]int)
+	for _, t := range m.Tests {
+		tests[t.Feature]++
+	}
+
+	listed := m.FeatureNames()
+	if _, explicit := m.Features[core.GeneralFeature]; !explicit && tests[core.GeneralFeature] > 0 {
+		listed = append(listed, core.GeneralFeature)
+		sort.Strings(listed)
+	}
+	var rows []FeatureRow
+	for _, name := range listed {
+		if f.Feature != "" && name != f.Feature {
+			continue
+		}
+		st := played[name]
+		st.Feature = name
+		rows = append(rows, FeatureRow{FeatureStat: st, Tests: tests[name]})
+		delete(played, name)
+	}
+	var rest []string
+	for name := range played {
+		rest = append(rest, name)
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		rows = append(rows, FeatureRow{FeatureStat: played[name], Tests: tests[name]})
+	}
+	return rows, nil
+}
+
 // TestRow is a listed test with its number.
 type TestRow struct {
 	Number int

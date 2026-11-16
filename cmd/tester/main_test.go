@@ -64,10 +64,11 @@ func TestTheRealProgram(t *testing.T) {
 
 	project := t.TempDir()
 	manifest := `
-manifest_version: 1
+manifest_version: 2
 project: smoke
 history: .tester/history.sqlite
-features: [shell]
+features:
+  shell: {}
 environments:
   local: {}
 runners:

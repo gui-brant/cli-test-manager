@@ -57,7 +57,7 @@ func TestEndToEndWithTheRealRunnerAndStore(t *testing.T) {
 
 	exe := os.Args[0]
 	m := &core.Manifest{
-		Version: 1, Project: "e2e", History: "history.sqlite", Features: []string{"accounts"},
+		Version: 2, Project: "e2e", History: "history.sqlite", Features: map[string]core.FeatureSpec{"accounts": {}},
 		Environments: map[string]core.EnvironmentSpec{
 			"deployed": {
 				// GORACE keeps race-built helper processes from pausing at exit.

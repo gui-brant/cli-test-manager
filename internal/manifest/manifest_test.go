@@ -15,10 +15,11 @@ const examplePath = "../../examples/test-manifest.yaml"
 // base is the smallest manifest that parses and validates. The rejection tests
 // add one bad line to it.
 const base = `
-manifest_version: 1
+manifest_version: 2
 project: p
 history: h.sqlite
-features: [a]
+features:
+  a: {}
 environments:
   local: { vars: {}, secrets: [] }
 runners:
@@ -46,11 +47,23 @@ func TestParseExampleFile(t *testing.T) {
 		t.Fatalf("the example manifest is not valid:\n%v", Report(errs))
 	}
 
-	if m.Version != 1 || m.Project != "example" || m.History != ".tester/history.sqlite" {
+	if m.Version != 2 || m.Project != "example" || m.History != ".tester/history.sqlite" {
 		t.Errorf("header = %d, %q, %q", m.Version, m.Project, m.History)
 	}
-	if want := []string{"accounts", "notes"}; !reflect.DeepEqual(m.Features, want) {
-		t.Errorf("features = %v; want %v", m.Features, want)
+	if want := []string{"accounts", "notes"}; !reflect.DeepEqual(m.FeatureNames(), want) {
+		t.Errorf("features = %v; want %v", m.FeatureNames(), want)
+	}
+	if got := m.Features["accounts"].Paths; len(got) == 0 {
+		t.Errorf("the example's accounts feature has no path patterns")
+	}
+	if !m.Environments["local"].Allows(core.ActionRun) || m.Environments["local"].Allows(core.ActionImport) {
+		t.Errorf("local actions = %v", m.Environments["local"].Actions)
+	}
+	if !m.Environments["network"].Allows(core.ActionImport) || m.Environments["network"].Allows(core.ActionRun) {
+		t.Errorf("network actions = %v", m.Environments["network"].Actions)
+	}
+	if got := m.Runners["sql"].Version; len(got) == 0 {
+		t.Errorf("the example's sql runner has no version command")
 	}
 	if got := m.Environments["deployed"].Secrets; !reflect.DeepEqual(got, []string{"ACCOUNT_PASSWORD"}) {
 		t.Errorf("deployed secrets = %v", got)
@@ -123,12 +136,55 @@ func TestValidateFlagsAShortTimeout(t *testing.T) {
 // Words YAML 1.1 turned into booleans must stay text here: a feature called
 // "no" or "on" is a feature, not false and true.
 func TestParseKeepsBooleanLookalikesAsText(t *testing.T) {
-	m, err := parseString(strings.Replace(base, "features: [a]", "features: [no, on, off, yes, y, n]", 1))
+	m, err := parseString(strings.Replace(base, "  a: {}", "  no: {}\n  on: {}\n  off: {}\n  yes: {}\n  y: {}\n  n: {}", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"no", "on", "off", "yes", "y", "n"}; !reflect.DeepEqual(m.Features, want) {
-		t.Errorf("features = %q; want %q", m.Features, want)
+	if want := []string{"n", "no", "off", "on", "y", "yes"}; !reflect.DeepEqual(m.FeatureNames(), want) {
+		t.Errorf("features = %q; want %q", m.FeatureNames(), want)
+	}
+}
+
+// The three keys added for integration: feature paths, environment actions and
+// a runner's version command.
+func TestParseReadsPathsActionsAndVersion(t *testing.T) {
+	in := strings.Replace(base, "  a: {}", "  a:\n    paths: [\"db/**/*a*.sql\", \"tests/a_*\"]", 1)
+	in = strings.Replace(in, "  local: { vars: {}, secrets: [] }", "  local: { actions: [run] }\n  lab: { actions: [import] }\n  plain: {}", 1)
+	in += "    version: [\"tool\", \"--version\"]\n"
+	m, err := parseString(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"db/**/*a*.sql", "tests/a_*"}; !reflect.DeepEqual(m.Features["a"].Paths, want) {
+		t.Errorf("paths = %v; want %v", m.Features["a"].Paths, want)
+	}
+	if got := m.Environments["local"].Actions; !reflect.DeepEqual(got, []core.Action{core.ActionRun}) {
+		t.Errorf("local actions = %v", got)
+	}
+	if got := m.Runners["r"].Version; !reflect.DeepEqual(got, []string{"tool", "--version"}) {
+		t.Errorf("version = %v", got)
+	}
+	// Omitted actions mean run and pull; import must be written.
+	cases := []struct {
+		env  string
+		run  bool
+		pull bool
+		imp  bool
+	}{{"local", true, false, false}, {"lab", false, false, true}, {"plain", true, true, false}}
+	for _, c := range cases {
+		e := m.Environments[c.env]
+		if e.Allows(core.ActionRun) != c.run || e.Allows(core.ActionPull) != c.pull || e.Allows(core.ActionImport) != c.imp {
+			t.Errorf("%s allows run=%v pull=%v import=%v; want %v %v %v", c.env,
+				e.Allows(core.ActionRun), e.Allows(core.ActionPull), e.Allows(core.ActionImport), c.run, c.pull, c.imp)
+		}
+	}
+}
+
+// The old list form of features is a wrong type now, not a silent empty map.
+func TestParseRejectsTheOldFeatureList(t *testing.T) {
+	_, err := parseString(strings.Replace(base, "features:\n  a: {}", "features: [a]", 1))
+	if err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("the list form of features gave %v; want a type error", err)
 	}
 }
 
@@ -145,7 +201,7 @@ func TestParseRejects(t *testing.T) {
 		{"wrong type: text for a bool", base + "    batch: maybe\n", []string{"cannot unmarshal", "line"}},
 		{"wrong type: a number for a bool", base + "    batch: 5\n", []string{"cannot unmarshal", "line"}},
 		{"timeout without a unit", base + "    timeout: 10\n", []string{"time.Duration", "line"}},
-		{"wrong type: text for the version", strings.Replace(base, "manifest_version: 1", "manifest_version: one", 1), []string{"cannot unmarshal"}},
+		{"wrong type: text for the version", strings.Replace(base, "manifest_version: 2", "manifest_version: one", 1), []string{"cannot unmarshal"}},
 		{"duplicate key", base + "project: again\n", []string{"already"}},
 		{"empty file", "", []string{"empty"}},
 		{"only comments", "# nothing here\n", []string{"empty"}},
@@ -177,7 +233,7 @@ func TestParseRejects(t *testing.T) {
 func FuzzParseAndValidate(f *testing.F) {
 	for _, seed := range []string{
 		"", base, base + "    timeout: 10\n", "- a\n", "---\n---\n", "a: [\n", "{{{}}}",
-		strings.Replace(base, "features: [a]", "features: [no, on]", 1),
+		strings.Replace(base, "  a: {}", "  no: {}\n  on:\n    paths: [x]", 1),
 	} {
 		f.Add(seed)
 	}

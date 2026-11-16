@@ -16,10 +16,12 @@ import (
 )
 
 const manifestFor = `
-manifest_version: 1
+manifest_version: 2
 project: %s
 history: .tester/history.sqlite
-features: [birds, security]
+features:
+  birds: {}
+  security: {}
 environments:
   deployed: {}
   local: {}

@@ -11,10 +11,11 @@ import (
 )
 
 const goodManifest = `
-manifest_version: 1
+manifest_version: 2
 project: p
 history: .tester/history.sqlite
-features: [a]
+features:
+  a: {}
 environments:
   local: { vars: {}, secrets: [] }
 runners:

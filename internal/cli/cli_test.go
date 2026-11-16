@@ -62,10 +62,12 @@ const failingHTTP = `<testsuite name="s"><testcase name="rejects a bad password"
 // ---- the project under test ------------------------------------------------
 
 const twoEnvironments = `
-manifest_version: 1
+manifest_version: 2
 project: example
 history: .tester/history.sqlite
-features: [accounts, notes]
+features:
+  accounts: {}
+  notes: {}
 environments:
   local:
     vars: { BASE_URL: "http://127.0.0.1:8000" }
@@ -92,10 +94,11 @@ tests:
 `
 
 const oneEnvironment = `
-manifest_version: 1
+manifest_version: 2
 project: example
 history: .tester/history.sqlite
-features: [accounts]
+features:
+  accounts: {}
 environments:
   local:
     vars: { BASE_URL: "http://127.0.0.1:8000" }

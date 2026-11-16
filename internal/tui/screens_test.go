@@ -16,10 +16,12 @@ import (
 
 // A project like lab3: one environment, so there is nothing to choose.
 const oneEnvironment = `
-manifest_version: 1
+manifest_version: 2
 project: lab3
 history: .tester/history.sqlite
-features: [birds, security]
+features:
+  birds: {}
+  security: {}
 environments:
   deployed: {}
 runners:
@@ -37,10 +39,12 @@ tests:
 // A project with two environments, where one of the two bird tests only runs in
 // "local" (its runner allows nothing else).
 const twoEnvironments = `
-manifest_version: 1
+manifest_version: 2
 project: photo
 history: .tester/history.sqlite
-features: [birds, security]
+features:
+  birds: {}
+  security: {}
 environments:
   local: {}
   staging: {}

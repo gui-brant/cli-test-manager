@@ -19,7 +19,7 @@ var (
 
 func testManifest() *core.Manifest {
 	return &core.Manifest{
-		Features: []string{"accounts", "notes"},
+		Features: map[string]core.FeatureSpec{"accounts": {}, "notes": {}},
 		Tests: []core.TestSpec{
 			{ID: "users-table", Name: "Users table", Feature: "accounts"},
 			{ID: "login-flow", Name: "Login flow", Feature: "accounts"},

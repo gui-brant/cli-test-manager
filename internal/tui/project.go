@@ -205,7 +205,7 @@ type featureScreen struct {
 
 func newFeatureScreen(d Deps, e projects.Entry, l *manifestfile.Loaded) *featureScreen {
 	s := &featureScreen{sel: selection{deps: d, entry: e, loaded: l}}
-	features := append([]string(nil), l.Manifest.Features...)
+	features := l.Manifest.FeatureNames()
 	// Tests that belong to no feature are in "general", which the manifest does
 	// not have to list; without a row for it they could not be reached.
 	if !slices.Contains(features, core.GeneralFeature) {

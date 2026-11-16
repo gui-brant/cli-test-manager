@@ -2,19 +2,26 @@
 # The file lives at the project's root. It holds NAMES of secrets, never values.
 # Every value below is a neutral placeholder, not a real project's.
 
-manifest_version: 1
+manifest_version: 2
 project: example
 history: .tester/history.sqlite          # relative to this file; the project owns it
 
-features: [accounts, notes]              # `general` always exists, for cross-cutting checks
+features:                                # `general` always exists, for files in no feature
+  accounts:
+    paths: ["src/accounts/**", "tests/**/account*"]   # a change to a matching file selects the feature
+  notes:
+    paths: ["src/notes/**"]
 
 environments:
   local:
+    actions: [run]                       # what the tester may do here: run, pull, import
     vars:    { BASE_URL: "http://127.0.0.1:8000" }     # not secret, may be committed
     secrets: []                                        # names only, never values
-  deployed:
+  deployed:                              # no `actions` means run and pull
     vars:    { BASE_URL: "https://dev.example.test" }
     secrets: [ACCOUNT_PASSWORD]
+  network:
+    actions: [import]                    # results arrive from outside; the tester never runs anything here
 
 runners:
   sql:
@@ -24,6 +31,7 @@ runners:
     environments: [local]
     batch: true                          # accepts several files in one call
     timeout: 10m                         # always write a unit, for example 10m or 90s
+    version: ["run-sql-tests", "--version"]   # optional: its first line is recorded with every run
   http:
     run: ["http-runner", "--report", "{report}", "{files}"]
     format: junit

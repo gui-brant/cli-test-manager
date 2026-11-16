@@ -72,10 +72,10 @@ func parentEnv() []string {
 
 func testManifest() *core.Manifest {
 	return &core.Manifest{
-		Version:  1,
+		Version:  2,
 		Project:  "example",
 		History:  ".tester/history.sqlite",
-		Features: []string{"accounts", "notes"},
+		Features: map[string]core.FeatureSpec{"accounts": {}, "notes": {}},
 		Environments: map[string]core.EnvironmentSpec{
 			"local":    {Vars: map[string]string{"BASE_URL": "http://127.0.0.1:8000"}},
 			"deployed": {Vars: map[string]string{"BASE_URL": "https://dev.example.test"}, Secrets: []string{"ACCOUNT_PASSWORD"}},

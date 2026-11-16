@@ -11,10 +11,10 @@ import (
 // valid returns a fresh, sound manifest. Each test mutates its own copy.
 func valid() *core.Manifest {
 	return &core.Manifest{
-		Version:  1,
+		Version:  2,
 		Project:  "example",
 		History:  ".tester/history.sqlite",
-		Features: []string{"accounts", "notes"},
+		Features: map[string]core.FeatureSpec{"accounts": {}, "notes": {}},
 		Environments: map[string]core.EnvironmentSpec{
 			"local":    {Vars: map[string]string{"BASE_URL": "http://127.0.0.1:8000"}},
 			"deployed": {Vars: map[string]string{"BASE_URL": "https://dev.example.test"}, Secrets: []string{"ACCOUNT_PASSWORD"}},
@@ -58,7 +58,21 @@ func TestValidateAcceptsSoundManifests(t *testing.T) {
 		"no pull section":                  func(m *core.Manifest) { m.Pull = nil },
 		"no tests yet":                     func(m *core.Manifest) { m.Tests = nil },
 		"a test in the general feature":    func(m *core.Manifest) { m.Tests[0].Feature = core.GeneralFeature },
-		"general also listed as a feature": func(m *core.Manifest) { m.Features = append(m.Features, core.GeneralFeature) },
+		"general also listed as a feature": func(m *core.Manifest) { m.Features[core.GeneralFeature] = core.FeatureSpec{} },
+		"a feature with path patterns": func(m *core.Manifest) {
+			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"db/migrations/*accounts*.sql", "tests/**/accounts_*"}}
+		},
+		"an environment that only imports": func(m *core.Manifest) {
+			m.Environments["network"] = core.EnvironmentSpec{Actions: []core.Action{core.ActionImport}}
+		},
+		"an environment that runs, pulls and imports": func(m *core.Manifest) {
+			withEnv(m, "deployed", func(e *core.EnvironmentSpec) {
+				e.Actions = []core.Action{core.ActionRun, core.ActionPull, core.ActionImport}
+			})
+		},
+		"a runner with a version command": func(m *core.Manifest) {
+			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Version = []string{"run-sql-tests", "--version"} })
+		},
 		"a runner serving every environment": func(m *core.Manifest) {
 			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Environments = []string{"local", "deployed"} })
 		},
@@ -79,15 +93,29 @@ func TestValidateRejects(t *testing.T) {
 		want   string // a substring one of the problems must contain
 	}{
 		// header
-		{"version 2", func(m *core.Manifest) { m.Version = 2 }, "manifest_version: is 2"},
+		{"version 1", func(m *core.Manifest) { m.Version = 1 }, "manifest_version: is 1"},
 		{"version missing", func(m *core.Manifest) { m.Version = 0 }, "manifest_version: is missing"},
 		{"project empty", func(m *core.Manifest) { m.Project = "" }, "project: is required"},
 		{"history absolute", func(m *core.Manifest) { m.History = "/abs/h.sqlite" }, `history: "/abs/h.sqlite" is absolute`},
 		{"history climbs out", func(m *core.Manifest) { m.History = "../h.sqlite" }, "climbs out of the project folder"},
 
 		// features
-		{"feature with a bad name", func(m *core.Manifest) { m.Features = []string{"Bad Name"} }, "features[0]"},
-		{"feature listed twice", func(m *core.Manifest) { m.Features = []string{"a", "a"} }, "is listed twice"},
+		{"feature with a bad name", func(m *core.Manifest) { m.Features["Bad Name"] = core.FeatureSpec{} }, "features.Bad Name"},
+		{"general with paths", func(m *core.Manifest) {
+			m.Features[core.GeneralFeature] = core.FeatureSpec{Paths: []string{"docs/*"}}
+		}, "the catch-all for files in no feature"},
+		{"feature path absolute", func(m *core.Manifest) {
+			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"/etc/*"}}
+		}, "features.accounts.paths[0]"},
+		{"feature path climbs out", func(m *core.Manifest) {
+			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"../x/*"}}
+		}, "climbs out of the project folder"},
+		{"feature path not a valid pattern", func(m *core.Manifest) {
+			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"db/[a"}}
+		}, "is not a valid pattern"},
+		{"feature path listed twice", func(m *core.Manifest) {
+			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"db/*", "db/*"}}
+		}, "is listed twice"},
 
 		// environments
 		{"no environments", func(m *core.Manifest) { m.Environments = nil }, "at least one environment is required"},
@@ -107,6 +135,15 @@ func TestValidateRejects(t *testing.T) {
 		{"name both a variable and a secret", func(m *core.Manifest) {
 			withEnv(m, "deployed", func(e *core.EnvironmentSpec) { e.Secrets = []string{"BASE_URL"} })
 		}, "both a variable and a secret"},
+		{"unknown action", func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{"deploy"} })
+		}, `"deploy" is not "run", "pull" or "import"`},
+		{"action listed twice", func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionRun, core.ActionRun} })
+		}, "is listed twice"},
+		{"a runner serving an environment that cannot run", func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionImport} })
+		}, `environment "local" does not allow "run"`},
 
 		// runners
 		{"no runners", func(m *core.Manifest) { m.Runners = nil }, "at least one runner is required"},
@@ -141,6 +178,12 @@ func TestValidateRejects(t *testing.T) {
 		{"runner environment listed twice", func(m *core.Manifest) {
 			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Environments = []string{"local", "local"} })
 		}, "is listed twice"},
+		{"version command with an empty program", func(m *core.Manifest) {
+			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Version = []string{"", "--version"} })
+		}, "runners.sql.version[0]: the program name is empty"},
+		{"version command with a placeholder", func(m *core.Manifest) {
+			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Version = []string{"tool", "{files}"} })
+		}, "a version command takes no placeholders"},
 		{"timeout of 10 nanoseconds", func(m *core.Manifest) { withRunner(m, "sql", func(r *core.RunnerSpec) { r.Timeout = 10 }) }, "it must be at least 1s"},
 		{"timeout of zero", func(m *core.Manifest) { withRunner(m, "sql", func(r *core.RunnerSpec) { r.Timeout = 0 }) }, "it must be at least 1s"},
 
@@ -162,6 +205,9 @@ func TestValidateRejects(t *testing.T) {
 		{"pull artifact", func(m *core.Manifest) { m.Pull.Artifact = "" }, "pull.artifact: is required"},
 		{"pull environment missing", func(m *core.Manifest) { m.Pull.Environment = "" }, "pull.environment: is required"},
 		{"pull environment unknown", func(m *core.Manifest) { m.Pull.Environment = "nope" }, `environment "nope" is not defined`},
+		{"pull environment that does not allow pull", func(m *core.Manifest) {
+			withEnv(m, "deployed", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionRun} })
+		}, `environment "deployed" does not allow "pull"`},
 		{"pull look-back", func(m *core.Manifest) { m.Pull.LookbackDays = 0 }, "must be at least 1"},
 		{"pull token with a bad name", func(m *core.Manifest) { m.Pull.Token = "bad token" }, "not a valid variable name"},
 		{"pull token also an environment secret", func(m *core.Manifest) { m.Pull.Token = "ACCOUNT_PASSWORD" }, "never be handed to a test command"},

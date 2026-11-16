@@ -218,7 +218,7 @@ func TestResultListed(t *testing.T) {
 
 func TestManifestHelpers(t *testing.T) {
 	m := &Manifest{
-		Features: []string{"accounts", "notes"},
+		Features: map[string]FeatureSpec{"accounts": {}, "notes": {}},
 		Tests: []TestSpec{
 			{ID: "users-table", Feature: "accounts"},
 			{ID: "login-flow", Feature: "accounts"},

@@ -73,11 +73,11 @@ func (v *validator) add(where, format string, args ...any) {
 func (v *validator) header() {
 	m := v.m
 	switch m.Version {
-	case 1:
+	case 2:
 	case 0:
-		v.add("manifest_version", "is missing; this tester reads version 1")
+		v.add("manifest_version", "is missing; this tester reads version 2")
 	default:
-		v.add("manifest_version", "is %d; this tester reads version 1", m.Version)
+		v.add("manifest_version", "is %d; this tester reads version 2", m.Version)
 	}
 	if strings.TrimSpace(m.Project) == "" {
 		v.add("project", "is required")
@@ -88,17 +88,28 @@ func (v *validator) header() {
 }
 
 func (v *validator) features() {
-	seen := make(map[string]bool)
-	for i, f := range v.m.Features {
-		where := fmt.Sprintf("features[%d]", i)
-		if !namePattern.MatchString(f) {
-			v.add(where, "%q is not a valid name (lowercase letters, digits, hyphen, underscore)", f)
-			continue
+	for _, name := range sortedKeys(v.m.Features) {
+		where := "features." + name
+		if !namePattern.MatchString(name) {
+			v.add(where, "%q is not a valid name (lowercase letters, digits, hyphen, underscore)", name)
 		}
-		if seen[f] {
-			v.add(where, "%q is listed twice", f)
+		paths := v.m.Features[name].Paths
+		if name == core.GeneralFeature && len(paths) > 0 {
+			v.add(where+".paths", "%q is the catch-all for files in no feature, so it has no paths of its own", core.GeneralFeature)
 		}
-		seen[f] = true
+		seen := make(map[string]bool)
+		for i, p := range paths {
+			at := fmt.Sprintf("%s.paths[%d]", where, i)
+			if why := pathProblem(p); why != "" {
+				v.add(at, "%s", why)
+			} else if _, err := path.Match(p, ""); err != nil {
+				v.add(at, "%q is not a valid pattern: %v", p, err)
+			}
+			if seen[p] {
+				v.add(at, "%q is listed twice", p)
+			}
+			seen[p] = true
+		}
 	}
 }
 
@@ -113,6 +124,19 @@ func (v *validator) environments() {
 		where := "environments." + name
 		if !namePattern.MatchString(name) {
 			v.add(where, "%q is not a valid name (lowercase letters, digits, hyphen, underscore)", name)
+		}
+
+		seenAction := make(map[core.Action]bool)
+		for _, a := range env.Actions {
+			switch a {
+			case core.ActionRun, core.ActionPull, core.ActionImport:
+			default:
+				v.add(where+".actions", "%q is not %q, %q or %q", a, core.ActionRun, core.ActionPull, core.ActionImport)
+			}
+			if seenAction[a] {
+				v.add(where+".actions", "%q is listed twice", a)
+			}
+			seenAction[a] = true
 		}
 
 		for _, key := range sortedKeys(env.Vars) {
@@ -178,13 +202,26 @@ func (v *validator) runners() {
 		}
 		seen := make(map[string]bool)
 		for _, e := range r.Environments {
-			if _, ok := v.m.Environments[e]; !ok {
+			if env, ok := v.m.Environments[e]; !ok {
 				v.add(where+".environments", "environment %q is not defined", e)
+			} else if !env.Allows(core.ActionRun) {
+				v.add(where+".environments", "environment %q does not allow %q, so no runner can serve it", e, core.ActionRun)
 			}
 			if seen[e] {
 				v.add(where+".environments", "%q is listed twice", e)
 			}
 			seen[e] = true
+		}
+
+		if len(r.Version) > 0 {
+			if strings.TrimSpace(r.Version[0]) == "" {
+				v.add(where+".version[0]", "the program name is empty")
+			}
+			for i, a := range r.Version {
+				if strings.Contains(a, core.PlaceholderFiles) || strings.Contains(a, core.PlaceholderReport) {
+					v.add(fmt.Sprintf("%s.version[%d]", where, i), "a version command takes no placeholders")
+				}
+			}
 		}
 
 		if r.Timeout < MinTimeout {
@@ -292,11 +329,13 @@ func (v *validator) pull() {
 	if strings.TrimSpace(p.Artifact) == "" {
 		v.add("pull.artifact", "is required")
 	}
-	switch _, ok := v.m.Environments[p.Environment]; {
+	switch env, ok := v.m.Environments[p.Environment]; {
 	case p.Environment == "":
 		v.add("pull.environment", "is required: pulled results must say which environment they belong to")
 	case !ok:
 		v.add("pull.environment", "environment %q is not defined", p.Environment)
+	case !env.Allows(core.ActionPull):
+		v.add("pull.environment", "environment %q does not allow %q", p.Environment, core.ActionPull)
 	}
 	if p.LookbackDays < 1 {
 		v.add("pull.lookback_days", "is %d; it must be at least 1", p.LookbackDays)

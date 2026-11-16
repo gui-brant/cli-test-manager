@@ -23,11 +23,11 @@ A project puts a `test-manifest.yaml` at its root. `examples/test-manifest.yaml`
 
 | Section | What it holds |
 |---|---|
-| `project`, `manifest_version`, `history` | the project's name, the schema version (1), and where the history file lives, relative to the manifest |
-| `features` | the names tests are grouped under. `general` always exists, for tests that belong to none |
-| `environments` | where tests can run (`local`, `staging`...), each with `vars` (plain values) and `secrets` (**names** only, never values) |
-| `runners` | how to start a kind of test: the command as an argument list with `{files}` (and `{report}` for a result file), the result `format` (`tap` or `junit`), `output` (`stdout` or `file`), the environments it serves, and a `timeout` |
-| `pull` | optional: where results produced elsewhere come from. The GitHub `repo` (`owner/name`), the `workflow`, the `artifact` name, the `environment` those results belong to, `lookback_days` for the first pull, and `token`: the **name** of the environment variable holding a GitHub token that can read the repository's Actions (never listed as an environment secret, so tests never receive it) |
+| `project`, `manifest_version`, `history` | the project's name, the schema version (2), and where the history file lives, relative to the manifest |
+| `features` | a map from each feature's name to its settings. `paths` (optional) lists glob patterns of the files that belong to the feature (`**` matches any number of folders). `general` always exists, for tests and files that belong to none |
+| `environments` | where tests can run (`local`, `staging`...), each with `vars` (plain values), `secrets` (**names** only, never values) and `actions`: what the tester may do there (`run`, `pull`, `import`; omitted means `run` and `pull`) |
+| `runners` | how to start a kind of test: the command as an argument list with `{files}` (and `{report}` for a result file), the result `format` (`tap` or `junit`), `output` (`stdout` or `file`), the environments it serves (each must allow `run`), a `timeout`, and an optional `version` command whose first line is recorded with every run |
+| `pull` | optional: where results produced elsewhere come from. The GitHub `repo` (`owner/name`), the `workflow`, the `artifact` name, the `environment` those results belong to (it must allow `pull`), `lookback_days` for the first pull, and `token`: the **name** of the environment variable holding a GitHub token that can read the repository's Actions (never listed as an environment secret, so tests never receive it) |
 | `tests` | the tests, in order. The order is the numbering and is append-only, so history stays readable. Each has an `id` that never changes, a `name`, a `feature`, a `runner`, a `file` and an optional `tag` |
 
 The tester looks for the manifest in the current folder and the folders above it, unless `--manifest PATH` names it (a file or a folder).

@@ -54,8 +54,9 @@ type Manifest struct {
 	// History is the path of the project-owned history file, relative to the
 	// manifest's folder.
 	History string `yaml:"history"`
-	// Features lists the project's features. GeneralFeature always exists.
-	Features []string `yaml:"features"`
+	// Features maps each feature's name to its settings. GeneralFeature always
+	// exists and need not be listed.
+	Features map[string]FeatureSpec `yaml:"features"`
 	// Environments maps an environment name (local, deployed, anything the
 	// project defines) to its settings.
 	Environments map[string]EnvironmentSpec `yaml:"environments"`
@@ -69,8 +70,31 @@ type Manifest struct {
 	Pull *PullSpec `yaml:"pull,omitempty"`
 }
 
+// FeatureSpec is one feature's settings.
+type FeatureSpec struct {
+	// Paths are glob patterns, relative to the project, of the files that
+	// belong to the feature. A change to a matching file selects the feature.
+	// `**` matches any number of folders. May be empty.
+	Paths []string `yaml:"paths,omitempty"`
+}
+
+// Action is something the tester may do in an environment.
+type Action string
+
+const (
+	// ActionRun: the tester starts tests there.
+	ActionRun Action = "run"
+	// ActionPull: the tester fetches results a CI service produced there.
+	ActionPull Action = "pull"
+	// ActionImport: the tester records result files that arrive from outside.
+	ActionImport Action = "import"
+)
+
 // EnvironmentSpec is one place tests can act (the "type" in the menu).
 type EnvironmentSpec struct {
+	// Actions lists what the tester may do in this environment. When omitted
+	// it is run and pull; import is allowed only when written here.
+	Actions []Action `yaml:"actions,omitempty"`
 	// Vars are non-secret variables handed to the command. They may be
 	// committed.
 	Vars map[string]string `yaml:"vars"`
@@ -96,6 +120,10 @@ type RunnerSpec struct {
 	Batch bool `yaml:"batch"`
 	// Timeout stops a command that runs too long.
 	Timeout time.Duration `yaml:"timeout"`
+	// Version is an optional command (an argument list, no placeholders) that
+	// prints the version of the tool this runner starts. Its first line is
+	// recorded with every run.
+	Version []string `yaml:"version,omitempty"`
 }
 
 // TestSpec is one entry of the test list.
@@ -150,5 +178,25 @@ func (m *Manifest) Test(id string) (TestSpec, bool) {
 // HasFeature reports whether name is a feature of the project. GeneralFeature
 // always is.
 func (m *Manifest) HasFeature(name string) bool {
-	return name == GeneralFeature || slices.Contains(m.Features, name)
+	_, listed := m.Features[name]
+	return name == GeneralFeature || listed
+}
+
+// FeatureNames returns the listed features' names, sorted, so screens show
+// them in a stable order.
+func (m *Manifest) FeatureNames() []string {
+	names := make([]string, 0, len(m.Features))
+	for name := range m.Features {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// Allows reports whether the tester may do the action in this environment.
+func (e EnvironmentSpec) Allows(a Action) bool {
+	if len(e.Actions) == 0 {
+		return a == ActionRun || a == ActionPull
+	}
+	return slices.Contains(e.Actions, a)
 }

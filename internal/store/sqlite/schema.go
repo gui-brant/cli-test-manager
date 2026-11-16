@@ -95,4 +95,27 @@ var migrations = [][]string{
 			PRIMARY KEY (run_id, position)
 		)`,
 	},
+	{ // version 4: the files a run was made with, kept as text.
+		// `blob` holds each distinct text once, under the SHA-256 of its content, so
+		// a file that did not change between runs costs one row per run in
+		// `run_file` and no more text. A file whose text is not kept (binary, too
+		// large, holds a secret) has a run_file row with a note and no blob.
+		// Nothing deletes a blob yet: runs are only ever added, and a removed run
+		// would leave its texts behind.
+		`CREATE TABLE blob (
+			hash    TEXT PRIMARY KEY,
+			content BLOB NOT NULL
+		)`,
+		`CREATE TABLE run_file (
+			run_id  INTEGER NOT NULL REFERENCES run (id) ON DELETE CASCADE,
+			path    TEXT NOT NULL,
+			role    TEXT NOT NULL,
+			test_id TEXT NOT NULL,
+			hash    TEXT NOT NULL,
+			size    INTEGER NOT NULL,
+			note    TEXT NOT NULL,
+			PRIMARY KEY (run_id, path)
+		)`,
+		`CREATE INDEX run_file_test ON run_file (test_id) WHERE test_id <> ''`,
+	},
 }

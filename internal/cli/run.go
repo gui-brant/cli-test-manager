@@ -44,14 +44,16 @@ func (a *app) cmdRun(ctx context.Context, manifestPath string, args []string) in
 		return a.errorf("%v", err)
 	}
 
-	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now, Checkout: a.Checkout}
+	svc := &execute.Service{Runner: a.Runner, Creds: a.Creds, Environ: a.Environ, Now: a.Now, Checkout: a.Checkout, Tree: a.Tree}
 	req := execute.Request{
-		Manifest:    m,
-		Root:        loaded.Root,
-		Environment: envName,
-		Select:      execute.Selection{TestIDs: ids, Feature: *feature},
-		Trigger:     core.Trigger(*trigger),
-		Progress:    a.progress,
+		Manifest:     m,
+		Root:         loaded.Root,
+		Environment:  envName,
+		Select:       execute.Selection{TestIDs: ids, Feature: *feature},
+		Trigger:      core.Trigger(*trigger),
+		ManifestRaw:  loaded.Raw,
+		ManifestFile: loaded.File(),
+		Progress:     a.progress,
 	}
 
 	// Check everything first. Nobody should be asked "Are you sure?" about a run
@@ -200,6 +202,9 @@ func (a *app) printSummary(m *core.Manifest, rep execute.Report) {
 			text += ": " + msg
 		}
 		fmt.Fprintln(a.Stdout, text)
+	}
+	for _, n := range rep.Notes {
+		fmt.Fprintf(a.Stdout, "Note: %s\n", n)
 	}
 	if rep.Saved {
 		fmt.Fprintf(a.Stdout, "Details: tester history %d\n", rep.RunID)

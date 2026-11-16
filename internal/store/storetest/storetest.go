@@ -5,6 +5,8 @@ package storetest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -36,6 +38,7 @@ func Run(t *testing.T, open Open) {
 		{"test stats", testTestStats},
 		{"a test counts once per run, by the worst of its checks", testTestStatsCountOncePerRun},
 		{"feature stats count runs, plays and failed plays", testFeatureStats},
+		{"a run's files are kept as text and read back by path", testSnapshots},
 		{"large and unusual text round-trips", testLargeAndUnicode},
 		{"a cancelled context is an error", testCancelledContext},
 		{"a closed store is an error", testClosedStore},
@@ -439,6 +442,101 @@ func testTestStats(t *testing.T, s core.Store) {
 	}
 }
 
+func snapFile(path string, role core.SnapshotRole, testID, text string) core.SnapshotFile {
+	sum := sha256.Sum256([]byte(text))
+	return core.SnapshotFile{Path: path, Role: role, TestID: testID, Hash: hex.EncodeToString(sum[:]), Size: int64(len(text)), Content: []byte(text)}
+}
+
+// The files a run was made with are listed with the run, their text is read by
+// path, a file whose text was not kept says why, and the latest snapshot of a
+// test's file is the latest run's.
+func testSnapshots(t *testing.T, s core.Store) {
+	notKept := core.SnapshotFile{Path: "bin/tool", Role: core.RoleFeature, Hash: "ab12", Size: 9, Note: "binary"}
+
+	first := local("local", t0, result("a", "f", "A", core.StatusPass))
+	first.Files = []core.SnapshotFile{
+		snapFile("tests/a.sql", core.RoleTest, "a", "select 1;"),
+		snapFile("test-manifest.yaml", core.RoleManifest, "", "manifest one"),
+		snapFile("db/m.sql", core.RoleFeature, "", "create table t();"),
+		notKept,
+	}
+	id1 := save(t, s, first)
+
+	got, err := s.GetRun(ctx, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Listed by path, with everything but the text.
+	var paths []string
+	for _, f := range got.Files {
+		paths = append(paths, f.Path)
+		if f.Content != nil {
+			t.Errorf("%s: a run read back carries text; it must be asked for by path", f.Path)
+		}
+	}
+	if want := []string{"bin/tool", "db/m.sql", "test-manifest.yaml", "tests/a.sql"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("files = %v; want %v", paths, want)
+	}
+	if f := got.Files[3]; f.Role != core.RoleTest || f.TestID != "a" || f.Size != 9 || f.Hash != first.Files[0].Hash || !f.Kept() {
+		t.Errorf("tests/a.sql = %+v", f)
+	}
+	if f := got.Files[0]; f.Kept() || f.Note != "binary" || f.Hash != "ab12" {
+		t.Errorf("bin/tool = %+v; want it listed with its note and hash", f)
+	}
+
+	f, err := s.GetSnapshotFile(ctx, id1, "tests/a.sql")
+	if err != nil || string(f.Content) != "select 1;" || f.Role != core.RoleTest || f.TestID != "a" {
+		t.Errorf("GetSnapshotFile = %+v, %v", f, err)
+	}
+	if f, err := s.GetSnapshotFile(ctx, id1, "bin/tool"); err != nil || f.Content != nil || f.Note != "binary" {
+		t.Errorf("a file whose text was not kept: %+v, %v; want its note and no text", f, err)
+	}
+	if _, err := s.GetSnapshotFile(ctx, id1, "nope.sql"); !errors.Is(err, core.ErrNotFound) {
+		t.Errorf("a path the run does not have: %v; want ErrNotFound", err)
+	}
+	if _, err := s.GetSnapshotFile(ctx, id1+999, "tests/a.sql"); !errors.Is(err, core.ErrNotFound) {
+		t.Errorf("a run that does not exist: %v; want ErrNotFound", err)
+	}
+
+	// A later run: the test's file changed, the manifest did not. Each run reads
+	// its own text back.
+	second := local("local", t0.Add(time.Hour), result("a", "f", "A", core.StatusPass))
+	second.Files = []core.SnapshotFile{
+		snapFile("tests/a.sql", core.RoleTest, "a", "select 2;"),
+		snapFile("test-manifest.yaml", core.RoleManifest, "", "manifest one"),
+	}
+	id2 := save(t, s, second)
+	for _, c := range []struct {
+		run  int64
+		path string
+		want string
+	}{{id1, "tests/a.sql", "select 1;"}, {id2, "tests/a.sql", "select 2;"}, {id1, "test-manifest.yaml", "manifest one"}, {id2, "test-manifest.yaml", "manifest one"}} {
+		if f, err := s.GetSnapshotFile(ctx, c.run, c.path); err != nil || string(f.Content) != c.want {
+			t.Errorf("run %d %s = %q, %v; want %q", c.run, c.path, f.Content, err, c.want)
+		}
+	}
+
+	runID, latest, err := s.LatestTestFile(ctx, "a")
+	if err != nil || runID != id2 || string(latest.Content) != "select 2;" {
+		t.Errorf("LatestTestFile = run %d %q, %v; want run %d select 2;", runID, latest.Content, err, id2)
+	}
+	if _, _, err := s.LatestTestFile(ctx, "never-played"); !errors.Is(err, core.ErrNotFound) {
+		t.Errorf("a test no run has played: %v; want ErrNotFound", err)
+	}
+
+	// A keyed run replaces its files, it does not add to them.
+	keyed := remote("5", 1, core.RunComplete, t0, result("a", "f", "A", core.StatusPass))
+	keyed.Files = []core.SnapshotFile{snapFile("x.sql", core.RoleFeature, "", "one"), snapFile("y.sql", core.RoleFeature, "", "two")}
+	kid := save(t, s, keyed)
+	keyed.Files = []core.SnapshotFile{snapFile("z.sql", core.RoleFeature, "", "three")}
+	if again := save(t, s, keyed); again != kid {
+		t.Fatalf("a keyed run got ID %d after %d", again, kid)
+	}
+	if got, err := s.GetRun(ctx, kid); err != nil || len(got.Files) != 1 || got.Files[0].Path != "z.sql" {
+		t.Errorf("after replacing: %+v, %v; want only z.sql", got.Files, err)
+	}
+}
+
 // checks makes n results of one test with the given statuses.
 func checks(testID, feature string, statuses ...core.Status) []core.Result {
 	var out []core.Result
@@ -568,6 +666,14 @@ func testCancelledContext(t *testing.T, s core.Store) {
 		"TestStats": func() error { _, err := s.TestStats(cancelled, core.StatsFilter{}); return err },
 		"FeatureStats": func() error {
 			_, err := s.FeatureStats(cancelled, core.StatsFilter{})
+			return err
+		},
+		"GetSnapshotFile": func() error {
+			_, err := s.GetSnapshotFile(cancelled, id, "tests/a.sql")
+			return err
+		},
+		"LatestTestFile": func() error {
+			_, _, err := s.LatestTestFile(cancelled, "a")
 			return err
 		},
 	}

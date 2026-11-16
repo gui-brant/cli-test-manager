@@ -43,6 +43,43 @@ type Tool struct {
 	Version string
 }
 
+// SnapshotRole says why a file is part of a run's snapshot.
+type SnapshotRole string
+
+const (
+	// RoleManifest: the manifest the run was made with.
+	RoleManifest SnapshotRole = "manifest"
+	// RoleTest: the file of a test that ran.
+	RoleTest SnapshotRole = "test"
+	// RoleFeature: a project file that matches the path patterns of a feature
+	// whose tests ran (its migrations, its code).
+	RoleFeature SnapshotRole = "feature"
+)
+
+// SnapshotFile is one file as it was when a run started. Its text is kept in
+// the history, so a run can be read later without the file on disk.
+type SnapshotFile struct {
+	// Path is relative to the project, with slashes.
+	Path string
+	Role SnapshotRole
+	// TestID is the test whose file this is, for RoleTest. Empty otherwise.
+	TestID string
+	// Hash is the SHA-256 of the file's content, in hex. Two files with the same
+	// hash have the same text. It is recorded even when the text is not kept.
+	Hash string
+	// Size is the content's length in bytes.
+	Size int64
+	// Content is the text. It is nil when the file was listed but its text was
+	// not kept (see Note), and when a run is read back without asking for it.
+	Content []byte
+	// Note says why the text was not kept: "binary", "larger than the limit",
+	// "contains a secret value" and so on. Empty when it was kept.
+	Note string
+}
+
+// Kept reports whether the file's text is kept in the history.
+func (f SnapshotFile) Kept() bool { return f.Note == "" }
+
 // Result is the outcome of one test within a run.
 type Result struct {
 	// TestID is the manifest test id this result belongs to. It is empty when
@@ -103,6 +140,11 @@ type Run struct {
 	// Tools are the versions of the tools the run used, in a stable order.
 	// Empty when none were declared or given.
 	Tools []Tool
+	// Files are the files as they were when a run the tester started began:
+	// the manifest, the tests' files and the files of the features that ran.
+	// Empty for pulled and imported runs, which happened elsewhere. When a run is
+	// read back, Content is not loaded: ask for a file by path.
+	Files []SnapshotFile
 	// Results are the per-test outcomes. Empty for pending and expired runs.
 	Results []Result
 	// Diagnostic is the real cause when the run failed for a reason that

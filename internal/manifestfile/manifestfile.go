@@ -5,6 +5,7 @@
 package manifestfile
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,7 +30,13 @@ type Loaded struct {
 	Root string
 	// HistoryPath is the absolute path of the project's history file.
 	HistoryPath string
+	// Raw is the manifest file's text exactly as it was read and parsed, so a
+	// run can record what it was made with.
+	Raw []byte
 }
+
+// File is the manifest's name relative to the project folder.
+func (l *Loaded) File() string { return filepath.Base(l.Path) }
 
 // Find walks up from dir through its parent folders to the filesystem root and
 // returns the path of the nearest test-manifest.yaml, the way git finds .git.
@@ -64,13 +71,12 @@ func Load(path string) (*Loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("manifestfile: %w", err)
 	}
-	f, err := os.Open(abs)
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		return nil, fmt.Errorf("manifestfile: %w", err)
 	}
-	defer f.Close()
 
-	m, err := manifest.Parse(f)
+	m, err := manifest.Parse(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", abs, err)
 	}
@@ -84,6 +90,7 @@ func Load(path string) (*Loaded, error) {
 		Path:        abs,
 		Root:        root,
 		HistoryPath: filepath.Join(root, filepath.FromSlash(m.History)),
+		Raw:         data,
 	}, nil
 }
 

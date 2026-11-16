@@ -70,6 +70,9 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 			if _, err := conn.ExecContext(ctx, `DELETE FROM run_tool WHERE run_id = ?`, id); err != nil {
 				return err
 			}
+			if _, err := conn.ExecContext(ctx, `DELETE FROM run_file WHERE run_id = ?`, id); err != nil {
+				return err
+			}
 		} else {
 			res, err := conn.ExecContext(ctx, `INSERT INTO run (
 				source, environment, state, started_at, finished_at, exit_code,
@@ -99,6 +102,18 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 		for i, tool := range run.Tools {
 			if _, err := conn.ExecContext(ctx, `INSERT INTO run_tool (run_id, position, name, version) VALUES (?, ?, ?, ?)`,
 				id, i, tool.Name, tool.Version); err != nil {
+				return err
+			}
+		}
+		for _, f := range run.Files {
+			if f.Kept() {
+				// The same text under the same hash is stored once.
+				if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO blob (hash, content) VALUES (?, ?)`, f.Hash, f.Content); err != nil {
+					return err
+				}
+			}
+			if _, err := conn.ExecContext(ctx, `INSERT INTO run_file (run_id, path, role, test_id, hash, size, note)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`, id, f.Path, string(f.Role), f.TestID, f.Hash, f.Size, f.Note); err != nil {
 				return err
 			}
 		}
@@ -205,7 +220,80 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 	if err := toolRows.Err(); err != nil {
 		return core.Run{}, fmt.Errorf("store: reading tool versions: %w", err)
 	}
+
+	// The files' texts are not loaded with the run: a run can list hundreds of
+	// files, and most readers want only the list.
+	fileRows, err := tx.QueryContext(ctx, `SELECT path, role, test_id, hash, size, note FROM run_file WHERE run_id = ? ORDER BY path`, run.ID)
+	if err != nil {
+		return core.Run{}, fmt.Errorf("store: reading the run's files: %w", err)
+	}
+	defer fileRows.Close()
+	for fileRows.Next() {
+		var f core.SnapshotFile
+		var role string
+		if err := fileRows.Scan(&f.Path, &role, &f.TestID, &f.Hash, &f.Size, &f.Note); err != nil {
+			return core.Run{}, fmt.Errorf("store: reading the run's files: %w", err)
+		}
+		f.Role = core.SnapshotRole(role)
+		run.Files = append(run.Files, f)
+	}
+	if err := fileRows.Err(); err != nil {
+		return core.Run{}, fmt.Errorf("store: reading the run's files: %w", err)
+	}
 	return run, nil
+}
+
+// snapshotColumns are the columns read for one snapshot file, with its text
+// when the text was kept.
+const snapshotColumns = `f.path, f.role, f.test_id, f.hash, f.size, f.note, b.content`
+
+func scanSnapshot(row interface{ Scan(...any) error }) (core.SnapshotFile, error) {
+	var f core.SnapshotFile
+	var role string
+	if err := row.Scan(&f.Path, &role, &f.TestID, &f.Hash, &f.Size, &f.Note, &f.Content); err != nil {
+		return core.SnapshotFile{}, err
+	}
+	f.Role = core.SnapshotRole(role)
+	return f, nil
+}
+
+// GetSnapshotFile returns one file of a run's snapshot, with its text when the
+// text was kept, or core.ErrNotFound.
+func (s *Store) GetSnapshotFile(ctx context.Context, runID int64, path string) (core.SnapshotFile, error) {
+	f, err := scanSnapshot(s.db.QueryRowContext(ctx, `SELECT `+snapshotColumns+`
+		FROM run_file f LEFT JOIN blob b ON b.hash = f.hash AND f.note = ''
+		WHERE f.run_id = ? AND f.path = ?`, runID, path))
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.SnapshotFile{}, fmt.Errorf("store: run %d has no file %q: %w", runID, path, core.ErrNotFound)
+	}
+	if err != nil {
+		return core.SnapshotFile{}, fmt.Errorf("store: reading a snapshot file: %w", err)
+	}
+	return f, nil
+}
+
+// LatestTestFile returns the snapshot of a test's file from the most recent run
+// that played the test, or core.ErrNotFound.
+func (s *Store) LatestTestFile(ctx context.Context, testID string) (int64, core.SnapshotFile, error) {
+	var (
+		runID int64
+		role  string
+		f     core.SnapshotFile
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT f.run_id, `+snapshotColumns+`
+		FROM run_file f JOIN run r ON r.id = f.run_id
+		LEFT JOIN blob b ON b.hash = f.hash AND f.note = ''
+		WHERE f.test_id = ? AND f.role = 'test'
+		ORDER BY r.started_at DESC, r.id DESC LIMIT 1`, testID).
+		Scan(&runID, &f.Path, &role, &f.TestID, &f.Hash, &f.Size, &f.Note, &f.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, core.SnapshotFile{}, fmt.Errorf("store: no run has played test %q: %w", testID, core.ErrNotFound)
+	}
+	if err != nil {
+		return 0, core.SnapshotFile{}, fmt.Errorf("store: reading a snapshot file: %w", err)
+	}
+	f.Role = core.SnapshotRole(role)
+	return runID, f, nil
 }
 
 func boolToInt(b bool) int {

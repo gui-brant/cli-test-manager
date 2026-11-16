@@ -347,6 +347,12 @@ func (fakeStore) TestStats(context.Context, StatsFilter) ([]TestStat, error) { r
 func (fakeStore) FeatureStats(context.Context, StatsFilter) ([]FeatureStat, error) {
 	return nil, nil
 }
+func (fakeStore) GetSnapshotFile(context.Context, int64, string) (SnapshotFile, error) {
+	return SnapshotFile{}, ErrNotFound
+}
+func (fakeStore) LatestTestFile(context.Context, string) (int64, SnapshotFile, error) {
+	return 0, SnapshotFile{}, ErrNotFound
+}
 func (fakeStore) Close() error { return nil }
 
 func (fakeCreds) Get(context.Context, string) (string, error) { return "", ErrNotFound }

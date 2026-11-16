@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
+	"github.com/gui-brant/cli-test-manager/internal/tree"
 )
 
 var t0 = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
@@ -660,11 +661,15 @@ func TestTestsList(t *testing.T) {
 
 func TestTestsShow(t *testing.T) {
 	p := newProject(t, twoEnvironments)
+	p.deps.Tree = tree.New()
+	if code := p.do("run", "--env", "local", "--test", "login-flow", "--yes"); code != ExitOK {
+		t.Fatalf("run: exit %d; %s", code, p.stderr())
+	}
 	if code := p.do("tests", "show", "login-flow"); code != ExitOK {
 		t.Fatalf("exit %d; %s", code, p.stderr())
 	}
 	contains(t, "show", p.stdout(), "#2 login-flow Login flow", "feature: accounts runner: http tag: -",
-		"file: tests/http/login_flow.http", "GET /login")
+		"file: tests/http/login_flow.http", "snapshot: run 1, commit not recorded", "GET /login")
 
 	for name, args := range map[string][]string{
 		"unknown id": {"tests", "show", "nope"},
@@ -675,13 +680,15 @@ func TestTestsShow(t *testing.T) {
 		}
 	}
 
+	// What is shown is what the run recorded, not the file: with the file gone
+	// the same text is still there.
 	if err := os.Remove(filepath.Join(p.root, "tests/http/login_flow.http")); err != nil {
 		t.Fatal(err)
 	}
-	if code := p.do("tests", "show", "login-flow"); code != ExitError {
-		t.Errorf("missing file: exit %d", code)
+	if code := p.do("tests", "show", "login-flow"); code != ExitOK {
+		t.Errorf("file deleted since the run: exit %d; %s", code, p.stderr())
 	}
-	contains(t, "stderr", p.stderr(), "cannot read the test file tests/http/login_flow.http")
+	contains(t, "show", p.stdout(), "GET /login")
 }
 
 func TestCounts(t *testing.T) {

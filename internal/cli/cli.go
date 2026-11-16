@@ -50,6 +50,9 @@ type Deps struct {
 	// Checkout says which commit a run is made against and whether the files
 	// have uncommitted changes. Nil means neither is recorded.
 	Checkout core.Checkout
+	// Tree lists and reads the project's files, so a run records the files it
+	// was made with. Nil means only the manifest is recorded.
+	Tree core.Tree
 	// IsTerminal says whether standard input is a terminal. Only then does a
 	// run of every test ask for confirmation.
 	IsTerminal bool
@@ -197,7 +200,7 @@ Commands:
              tester import -h explains each flag
   tests    list the tests, or show one test's file
              tests [--feature NAME]
-             tests show <id>
+             tests show [--run N] <id>   (the file as a run recorded it)
   counts   show how each test has done
              --env NAME  --feature NAME  --since DATE
   check    check the manifest, and that every test file exists

@@ -201,6 +201,53 @@ func BuildWith(d query.RunDetail, id int64, loc *time.Location, opts Options) Ru
 	return out
 }
 
+// SnapshotHeader says which run a snapshot is from and what that run was made
+// against, for example "snapshot: run 7, commit 0123456 + uncommitted changes,
+// 2026-11-16 15:15:36".
+func SnapshotHeader(s query.Snapshot, loc *time.Location) string {
+	commit := "commit not recorded"
+	if s.Commit != "" {
+		commit = "commit " + commitText(core.Run{CommitSHA: s.Commit, Dirty: s.Dirty})
+	}
+	return fmt.Sprintf("snapshot: run %d, %s, %s", s.RunID, commit, When(loc, s.StartedAt))
+}
+
+// NotKeptText says why a snapshot file has no text to show.
+func NotKeptText(f core.SnapshotFile) string {
+	return fmt.Sprintf("The text of %s was not kept: %s.", f.Path, f.Note)
+}
+
+// FilesText lists the files a run was made with, one per line: what it is for,
+// its path, its size and the start of its hash, and why its text was not kept
+// when it was not.
+func FilesText(files []core.SnapshotFile) string {
+	if len(files) == 0 {
+		return "Files: none were recorded (the tester records them for the runs it starts)."
+	}
+	width := 0
+	for _, f := range files {
+		width = max(width, len(f.Path))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Files (%d):\n", len(files))
+	for _, f := range files {
+		hash := "-"
+		if len(f.Hash) >= 12 {
+			hash = f.Hash[:12]
+		}
+		role := string(f.Role)
+		if f.TestID != "" {
+			role += " " + f.TestID
+		}
+		fmt.Fprintf(&b, "  %-*s  %8d B  %s  %s", width, f.Path, f.Size, hash, role)
+		if f.Note != "" {
+			fmt.Fprintf(&b, "  (not kept: %s)", f.Note)
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // checksText summarises a test that printed several checks: how many, and how
 // many failed or were skipped.
 func checksText(p core.Play) string {

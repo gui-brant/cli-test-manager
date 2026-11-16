@@ -23,11 +23,14 @@ func (s selection) canRun() error {
 }
 
 func (s selection) service(store core.Store) *execute.Service {
-	return &execute.Service{Runner: s.deps.Runner, Creds: s.deps.Creds, Environ: s.deps.Environ, Now: s.deps.Now, Store: store, Checkout: s.deps.Checkout}
+	return &execute.Service{Runner: s.deps.Runner, Creds: s.deps.Creds, Environ: s.deps.Environ, Now: s.deps.Now, Store: store, Checkout: s.deps.Checkout, Tree: s.deps.Tree}
 }
 
 func (s selection) request(pick execute.Selection) execute.Request {
-	return execute.Request{Manifest: s.manifest(), Root: s.loaded.Root, Environment: s.env, Select: pick}
+	return execute.Request{
+		Manifest: s.manifest(), Root: s.loaded.Root, Environment: s.env, Select: pick,
+		ManifestRaw: s.loaded.Raw, ManifestFile: s.loaded.File(),
+	}
 }
 
 // preview checks a request without running anything, as the run command does

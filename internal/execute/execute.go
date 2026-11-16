@@ -31,6 +31,10 @@ type Service struct {
 	// Checkout says which commit the run is made against and whether the
 	// files have uncommitted changes. Nil means neither is recorded.
 	Checkout core.Checkout
+	// Tree lists and reads the project's files, so the run can record the files
+	// it was made with. Nil means only the manifest (when the request carries
+	// it) is recorded.
+	Tree core.Tree
 }
 
 // Selection says which tests to run. Both fields empty means every test. Both
@@ -51,6 +55,12 @@ type Request struct {
 	Select      Selection
 	// Trigger says what started the run. Empty means core.TriggerManual.
 	Trigger core.Trigger
+	// ManifestRaw is the manifest file's text exactly as it was read, and
+	// ManifestFile its path relative to Root (empty means DefaultManifestFile).
+	// The run records it with the files it was made with. Empty means the
+	// manifest is not recorded.
+	ManifestRaw  []byte
+	ManifestFile string
 	// Progress, when set, is told about each skipped test before the run
 	// starts, then about the start and the end of each test.
 	Progress func(Event)
@@ -96,6 +106,9 @@ type Report struct {
 	Run     core.Run
 	Skipped []SkippedTest
 	Saved   bool
+	// Notes say what could not be recorded about the run (for example that the
+	// project's files could not be listed). They do not mean the run failed.
+	Notes []string
 }
 
 // plan is everything checked and prepared before the first command starts.
@@ -142,12 +155,14 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 		run.CommitSHA, run.Dirty = s.Checkout.State(ctx, req.Root)
 	}
 	run.Tools = s.toolVersions(ctx, req, p)
+	var notes []string
+	run.Files, notes = s.snapshot(ctx, req, p)
 	var diagnostics, details []string
 	total := len(p.tests)
 
 	cancelled := func(done int, cause error) (Report, error) {
 		run.FinishedAt = s.now()
-		return Report{Run: run, Skipped: p.skipped},
+		return Report{Run: run, Skipped: p.skipped, Notes: notes},
 			fmt.Errorf("execute: cancelled after %d of %d tests; nothing was saved: %w", done, total, cause)
 	}
 
@@ -201,10 +216,10 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 
 	id, err := s.Store.SaveRun(ctx, run)
 	if err != nil {
-		return Report{Run: run, Skipped: p.skipped}, fmt.Errorf("execute: saving the run: %w", err)
+		return Report{Run: run, Skipped: p.skipped, Notes: notes}, fmt.Errorf("execute: saving the run: %w", err)
 	}
 	run.ID = id
-	return Report{RunID: id, Run: run, Skipped: p.skipped, Saved: true}, nil
+	return Report{RunID: id, Run: run, Skipped: p.skipped, Saved: true, Notes: notes}, nil
 }
 
 func (s *Service) now() time.Time {

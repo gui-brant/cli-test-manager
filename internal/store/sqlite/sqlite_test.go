@@ -3,7 +3,9 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -425,6 +427,94 @@ func TestForeignKeysAreBackOnAfterAnUpgradeStep(t *testing.T) {
 	}
 	if got := pragma(t, s.db, "foreign_keys"); got != 1 {
 		t.Errorf("foreign_keys = %d afterwards; want 1", got)
+	}
+}
+
+// The same text in many runs is one row of text, however many runs list it.
+func TestIdenticalTextIsStoredOnce(t *testing.T) {
+	s := openAt(t, newPath(t))
+	text := []byte("create table t ();")
+	sum := sha256.Sum256(text)
+	hash := hex.EncodeToString(sum[:])
+	for i := 0; i < 3; i++ {
+		run := someRun(i)
+		run.Files = []core.SnapshotFile{{Path: "db/m.sql", Role: core.RoleFeature, Hash: hash, Size: int64(len(text)), Content: text}}
+		if _, err := s.SaveRun(bg, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var blobs, listed int
+	if err := s.db.QueryRow("SELECT count(*) FROM blob").Scan(&blobs); err != nil || blobs != 1 {
+		t.Errorf("%d texts stored (%v); want 1", blobs, err)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM run_file").Scan(&listed); err != nil || listed != 3 {
+		t.Errorf("%d listed files (%v); want 3, one for each run", listed, err)
+	}
+
+	// A file whose text was not kept stores no text at all.
+	run := someRun(9)
+	run.Files = []core.SnapshotFile{{Path: "secret.env", Role: core.RoleFeature, Hash: "ff", Size: 5, Note: "contains a secret value"}}
+	if _, err := s.SaveRun(bg, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM blob").Scan(&blobs); err != nil || blobs != 1 {
+		t.Errorf("%d texts stored after a file that was not kept; want still 1", blobs)
+	}
+}
+
+// Deleting a run removes its list of files; the texts stay for the runs that
+// share them (nothing deletes a text yet).
+func TestDeletingARunDeletesItsFileList(t *testing.T) {
+	s := openAt(t, newPath(t))
+	run := someRun(1)
+	run.Files = []core.SnapshotFile{{Path: "a", Role: core.RoleManifest, Hash: "h", Size: 1, Content: []byte("x")}}
+	id, err := s.SaveRun(bg, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("DELETE FROM run WHERE id = ?", id); err != nil {
+		t.Fatal(err)
+	}
+	var listed int
+	if err := s.db.QueryRow("SELECT count(*) FROM run_file").Scan(&listed); err != nil || listed != 0 {
+		t.Errorf("%d listed files left after deleting their run (%v); want 0", listed, err)
+	}
+}
+
+// A file from the version before snapshots opens, keeps its runs, and can then
+// save a run with files.
+func TestAVersion3FileGainsTheSnapshotTables(t *testing.T) {
+	old := migrations
+	t.Cleanup(func() { migrations = old })
+
+	path := newPath(t)
+	migrations = old[:3] // the schema as it was
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveRun(bg, someRun(1)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	migrations = old // the program as it is now
+	s = openAt(t, path)
+	if got := pragma(t, s.db, "user_version"); got != len(old) {
+		t.Fatalf("version after upgrade = %d; want %d", got, len(old))
+	}
+	run, err := s.GetRun(bg, 1)
+	if err != nil || len(run.Results) != 2 || len(run.Files) != 0 {
+		t.Errorf("the old run: %d results, %d files, %v; want its results and no files", len(run.Results), len(run.Files), err)
+	}
+	fresh := someRun(2)
+	fresh.Files = []core.SnapshotFile{{Path: "a.sql", Role: core.RoleTest, TestID: "a", Hash: "h", Size: 3, Content: []byte("one")}}
+	id, err := s.SaveRun(bg, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, err := s.GetSnapshotFile(bg, id, "a.sql"); err != nil || string(f.Content) != "one" {
+		t.Errorf("a file saved after the upgrade: %+v, %v", f, err)
 	}
 }
 

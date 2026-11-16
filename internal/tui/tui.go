@@ -53,6 +53,9 @@ type Deps struct {
 	// Checkout says which commit a run is made against and whether the files
 	// have uncommitted changes. Nil means neither is recorded.
 	Checkout core.Checkout
+	// Tree lists and reads the project's files, so a run records the files it
+	// was made with. Nil means only the manifest is recorded.
+	Tree core.Tree
 	// Save opens the history file for writing, creating it when it is not there.
 	Save func(path string) (core.Store, error)
 	// Context ends a run in progress when the program is told to stop. Nil means

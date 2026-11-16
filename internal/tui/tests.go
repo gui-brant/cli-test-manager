@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/gui-brant/cli-test-manager/internal/query"
+	"github.com/gui-brant/cli-test-manager/internal/view"
 )
 
 // testsScreen lists the tests of the chosen feature, numbered as in the manifest.
@@ -77,24 +79,38 @@ type codeScreen struct {
 	scroll scroller
 }
 
+// newCodeScreen shows the test's file as the latest run that played it recorded
+// it, never the file on disk. A test no run has played has no snapshot, and the
+// screen says so.
 func newCodeScreen(sel selection, row query.TestRow) *codeScreen {
 	s := &codeScreen{sel: sel, row: row, scroll: newScroller()}
-	head := fmt.Sprintf("#%d  %s  %s\nfeature: %s   runner: %s   tag: %s\nfile: %s\n\n",
-		row.Number, row.ID, row.Name, row.Feature, row.Runner, orDash(row.Tag), row.File)
-	code, err := query.TestCode(sel.loaded.Root, row)
+	head := fmt.Sprintf("#%d  %s  %s\nfeature: %s   runner: %s   tag: %s\n",
+		row.Number, row.ID, row.Name, row.Feature, row.Runner, orDash(row.Tag))
+
+	var snap query.Snapshot
+	err := sel.withHistory(func(q *query.Service) error {
+		if q == nil {
+			return fmt.Errorf("test %q has not been run by the tester yet, so there is no snapshot of its file: run it once", row.ID)
+		}
+		var err error
+		snap, err = q.TestSnapshot(context.Background(), row.ID, 0)
+		return err
+	})
 	if err != nil {
-		s.text = head + fmt.Sprintf("cannot read the test file %s: %v", row.File, err)
+		s.text = head + "file: " + row.File + "\n\n" + err.Error()
 		return s
 	}
-	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(code.Text, "\t", "    "), "\n"), "\n")
+	head += fmt.Sprintf("file: %s\n%s\n\n", snap.File.Path, view.SnapshotHeader(snap, sel.deps.Loc))
+	if !snap.File.Kept() {
+		s.text = head + view.NotKeptText(snap.File)
+		return s
+	}
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(string(snap.File.Content), "\t", "    "), "\n"), "\n")
 	digits := len(fmt.Sprint(len(lines)))
 	var b strings.Builder
 	b.WriteString(head)
 	for i, l := range lines {
 		fmt.Fprintf(&b, "%*d  %s\n", digits, i+1, l)
-	}
-	if code.Omitted > 0 {
-		fmt.Fprintf(&b, "[... %d more bytes not shown ...]\n", code.Omitted)
 	}
 	s.text = strings.TrimSuffix(b.String(), "\n")
 	return s

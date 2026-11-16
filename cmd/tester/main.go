@@ -20,6 +20,7 @@ import (
 	"github.com/gui-brant/cli-test-manager/internal/runner"
 	"github.com/gui-brant/cli-test-manager/internal/source/github"
 	"github.com/gui-brant/cli-test-manager/internal/store/sqlite"
+	"github.com/gui-brant/cli-test-manager/internal/tree"
 	"github.com/gui-brant/cli-test-manager/internal/tui"
 )
 
@@ -43,6 +44,7 @@ func main() {
 		Runner:     runner.New(),
 		Creds:      env.New(),
 		Checkout:   git.New(),
+		Tree:       tree.New(),
 		IsTerminal: isTerminal(os.Stdin),
 
 		ProjectsFile: projectsFile,
@@ -61,6 +63,7 @@ func main() {
 				Environ:  os.Environ,
 				Now:      time.Now,
 				Checkout: git.New(),
+				Tree:     tree.New(),
 				Save:     func(path string) (core.Store, error) { return sqlite.Open(path) },
 				// Pulling from GitHub, when a project's manifest says to.
 				NewSource: func(token string) core.ResultSource { return github.New(token) },

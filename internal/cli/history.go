@@ -25,11 +25,15 @@ func (a *app) cmdHistory(ctx context.Context, manifestPath string, args []string
 		"(stack traces, error objects). It is long and mostly useful to whoever writes the tests, so it is hidden unless asked for")
 	checks := fs.Bool("checks", false, "with a run number: list every check of a test that printed several, "+
 		"not only the failed ones. A test counts once whatever number of checks it printed")
+	files := fs.Bool("files", false, "with a run number: list the files the run was made with (the manifest, the tests' files, the features' files)")
+	file := fs.String("file", "", "with a run number: print one of those files as it was in the run, by its path")
 	// "tester history -h" explains what a run's view is made of; the general help
 	// does not repeat it.
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `Usage: tester history [flags]
        tester history <run number> [--checks] [--detail]
+       tester history <run number> --files
+       tester history <run number> --file <path>
 
 With no run number it lists runs, newest first. With one it shows that run in full.
 
@@ -43,6 +47,13 @@ What "history <run number>" shows, in order:
                 or exited with an error (only when there is something to show)
   Tool detail   only with --detail: the test tool's own stack traces and error
                 objects for the failed results
+
+The files a run was made with are kept in the history, as they were when it
+started: the manifest, the file of each test that ran, and the project files
+that match the path patterns of those tests' features. "--files" lists them
+(what each is for, its size, the start of its hash, and why its text was not
+kept when it was not); "--file <path>" prints one. Only runs the tester started
+have them; a pulled or imported run happened elsewhere.
 
 Flags:
 `)
@@ -65,6 +76,12 @@ Flags:
 	if *checks && len(rest) == 0 {
 		return a.errorf("--checks shows one run in full: tester history <run number> --checks")
 	}
+	if (*files || *file != "") && len(rest) == 0 {
+		return a.errorf("--files and --file show one run's files: tester history <run number> --files")
+	}
+	if *files && *file != "" {
+		return a.errorf("use --files to list a run's files or --file <path> to print one, not both")
+	}
 
 	loaded, err := a.load(manifestPath)
 	if err != nil {
@@ -83,6 +100,9 @@ Flags:
 	}
 
 	if len(rest) == 1 {
+		if *files || *file != "" {
+			return a.showRunFiles(ctx, store, rest[0], *file)
+		}
 		return a.showRun(ctx, loaded, store, rest[0], *detail, *checks)
 	}
 	if store == nil {
@@ -126,6 +146,44 @@ Flags:
 			r.Failed, r.Total, dash(strings.Join(r.Features, ",")), reason)
 	}
 	t.Flush()
+	return ExitOK
+}
+
+// showRunFiles lists the files a run was made with, or with a path prints one of
+// them as it was.
+func (a *app) showRunFiles(ctx context.Context, store *sqlite.Store, arg, path string) int {
+	id, err := strconv.ParseInt(arg, 10, 64)
+	if err != nil || id <= 0 {
+		return a.errorf("%q is not a run number", arg)
+	}
+	if store == nil {
+		return a.errorf("run %d not found: there is no history yet", id)
+	}
+	q := &query.Service{Store: store}
+	if path != "" {
+		snap, err := q.RunFile(ctx, id, path)
+		if err != nil {
+			return a.errorf("%v", err)
+		}
+		fmt.Fprintf(a.Stdout, "file: %s   (%s)\n%s\n\n", snap.File.Path, snap.File.Role, view.SnapshotHeader(snap, a.loc))
+		if !snap.File.Kept() {
+			fmt.Fprintln(a.Stdout, view.NotKeptText(snap.File))
+			return ExitOK
+		}
+		fmt.Fprint(a.Stdout, string(snap.File.Content))
+		return ExitOK
+	}
+	run, err := store.GetRun(ctx, id)
+	if errors.Is(err, core.ErrNotFound) {
+		return a.errorf("run %d not found", id)
+	}
+	if err != nil {
+		return a.errorf("%v", err)
+	}
+	fmt.Fprintf(a.Stdout, "Run %d  %s\n\n%s\n", id, view.SnapshotHeader(query.Snapshot{RunID: id, StartedAt: run.StartedAt, Commit: run.CommitSHA, Dirty: run.Dirty}, a.loc), view.FilesText(run.Files))
+	if len(run.Files) > 0 {
+		fmt.Fprintf(a.Stdout, "\nPrint one with: tester history %d --file <path>\n", id)
+	}
 	return ExitOK
 }
 

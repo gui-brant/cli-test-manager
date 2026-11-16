@@ -45,6 +45,15 @@ type Store interface {
 	// plays each feature had. Only features that were played appear.
 	FeatureStats(ctx context.Context, filter StatsFilter) ([]FeatureStat, error)
 
+	// GetSnapshotFile returns one file of a run's snapshot, with its text when
+	// the text was kept. It returns ErrNotFound when the run has no such file.
+	GetSnapshotFile(ctx context.Context, runID int64, path string) (SnapshotFile, error)
+
+	// LatestTestFile returns the snapshot of a test's file from the most recent
+	// run that played the test, with that run's ID. It returns ErrNotFound when
+	// no run of the tester's own has played it.
+	LatestTestFile(ctx context.Context, testID string) (runID int64, file SnapshotFile, err error)
+
 	// Close releases the connection.
 	Close() error
 }
@@ -219,6 +228,21 @@ type Runner interface {
 	// TimedOut stays false) and Run returns the output so far together with an
 	// error wrapping ctx's error.
 	Run(ctx context.Context, inv Invocation) (Output, error)
+}
+
+// Tree reads a project's files for a snapshot. The first implementation lists
+// them with git and reads them from disk.
+type Tree interface {
+	// Files lists the project's files, as paths relative to root with slashes:
+	// those git tracks and those it does not track but does not ignore. ok is
+	// false when it cannot say (not under git, git missing), in which case the
+	// caller snapshots only the files it already knows by name.
+	Files(ctx context.Context, root string) (files []string, ok bool)
+
+	// Read returns a file's content. It refuses a path that leaves the project,
+	// by name or through a symbolic link, and anything that is not a regular
+	// file.
+	Read(root, rel string) ([]byte, error)
 }
 
 // Checkout says which version of a project's files a run was made against. The

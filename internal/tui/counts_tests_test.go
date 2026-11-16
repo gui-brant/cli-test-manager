@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,15 +71,27 @@ func TestTestsAreListedWithTheirNumbersAndWhereTheyCannotRun(t *testing.T) {
 	}
 }
 
+// aSnapshotRun is a run of the tester that played testID and recorded its file.
+func aSnapshotRun(testID, path, text string) core.Run {
+	run := aRun("local", 0, aResult(testID, "birds", core.StatusPass, ""))
+	sum := sha256.Sum256([]byte(text))
+	run.CommitSHA, run.Dirty = "0123456789abcdef0123456789abcdef01234567", true
+	run.Files = []core.SnapshotFile{{
+		Path: path, Role: core.RoleTest, TestID: testID,
+		Hash: hex.EncodeToString(sum[:]), Size: int64(len(text)), Content: []byte(text),
+	}}
+	return run
+}
+
+// The code shown is what the latest run recorded, with the run it is from. The
+// file on disk is never read: here it does not exist at all.
 func TestChoosingATestShowsItsCodeWithLineNumbers(t *testing.T) {
-	m, file, _ := historyMenu(t, twoEnvironments)
+	m, _, save := historyMenu(t, twoEnvironments)
 	var code strings.Builder
 	for i := 1; i <= 12; i++ {
 		code.WriteString("\tconsole.log('line " + strings.Repeat("x", i%3) + "')\n")
 	}
-	if err := os.WriteFile(filepath.Join(projectFolder(file), "a.mjs"), []byte(code.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	save(aSnapshotRun("t1", "a.mjs", code.String()))
 	toTests(m)
 	press(m, "enter") // #1
 	if _, ok := top(m).(*codeScreen); !ok {
@@ -85,6 +99,7 @@ func TestChoosingATestShowsItsCodeWithLineNumbers(t *testing.T) {
 	}
 	view := m.View()
 	mustContain(t, "code", view, "photo › birds › local › test 1", "#1  t1  One", "feature: birds   runner: both   tag: -", "file: a.mjs",
+		"snapshot: run 1, commit 0123456 + uncommitted changes,",
 		" 1      console.log('line x')", "12      console.log('line ')")
 	if strings.Contains(view, "\t") {
 		t.Errorf("a tab was left in the code:\n%q", view)
@@ -93,22 +108,52 @@ func TestChoosingATestShowsItsCodeWithLineNumbers(t *testing.T) {
 	mustContain(t, "tests", m.View(), "The tests of birds", "> #1 One")
 }
 
-func TestCodeThatCannotBeReadSaysSo(t *testing.T) {
-	m, _, _ := historyMenu(t, twoEnvironments) // b.mjs does not exist
+// The tester never points at a live file: edited since the run, or even there
+// for a test that never ran, it is not shown.
+func TestTheCodeIsNeverTheLiveFile(t *testing.T) {
+	m, file, save := historyMenu(t, twoEnvironments)
+	save(aSnapshotRun("t1", "a.mjs", "recorded text\n"))
+	for _, name := range []string{"a.mjs", "b.mjs"} {
+		if err := os.WriteFile(filepath.Join(projectFolder(file), name), []byte("LIVE TEXT\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	toTests(m)
-	press(m, "down", "enter")
-	mustContain(t, "code", m.View(), "#2  t2  Two", "cannot read the test file b.mjs")
+	press(m, "enter") // t1: played, then edited
+	view := m.View()
+	mustContain(t, "t1", view, "recorded text")
+	if strings.Contains(view, "LIVE TEXT") {
+		t.Errorf("the live file is shown for a test that was run:\n%s", view)
+	}
+	press(m, "esc", "down", "enter") // t2: never played, but its file is on disk
+	view = m.View()
+	mustContain(t, "t2", view, "#2  t2  Two", "has not been run by the tester yet, so there is no snapshot of its file: run it once")
+	if strings.Contains(view, "LIVE TEXT") {
+		t.Errorf("the live file is shown for a test that never ran:\n%s", view)
+	}
+}
+
+func TestACodeFileWhoseTextWasNotKeptSaysWhy(t *testing.T) {
+	m, _, save := historyMenu(t, twoEnvironments)
+	run := aSnapshotRun("t1", "a.mjs", "token = abc\n")
+	run.Files[0].Content, run.Files[0].Note = nil, "contains a secret value"
+	save(run)
+	toTests(m)
+	press(m, "enter")
+	view := m.View()
+	mustContain(t, "code", view, "file: a.mjs", "snapshot: run 1", "The text of a.mjs was not kept: contains a secret value.")
+	if strings.Contains(view, "token") {
+		t.Errorf("the text was shown although it was not kept:\n%s", view)
+	}
 }
 
 func TestALongFileScrolls(t *testing.T) {
-	m, file, _ := historyMenu(t, twoEnvironments)
+	m, _, save := historyMenu(t, twoEnvironments)
 	var code strings.Builder
 	for i := 1; i <= 60; i++ {
 		code.WriteString("statement number\n")
 	}
-	if err := os.WriteFile(filepath.Join(projectFolder(file), "a.mjs"), []byte(code.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	save(aSnapshotRun("t1", "a.mjs", code.String()))
 	toTests(m)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
 	press(m, "enter")
@@ -143,11 +188,8 @@ func TestQAndCtrlCLeaveFromCountsTestsAndCode(t *testing.T) {
 
 func TestCountsTestsAndCodeSurviveATinyTerminal(t *testing.T) {
 	for _, size := range [][2]int{{1, 1}, {10, 2}, {30, 5}, {200, 3}} {
-		m, file, save := historyMenu(t, twoEnvironments)
-		save(aRun("local", 0, aResult("t1", "birds", core.StatusFail, "")))
-		if err := os.WriteFile(filepath.Join(projectFolder(file), "a.mjs"), []byte("one\ntwo\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		m, _, save := historyMenu(t, twoEnvironments)
+		save(aSnapshotRun("t1", "a.mjs", "one\ntwo\n"))
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		toCounts(m)
 		_ = m.View()

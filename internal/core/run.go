@@ -80,6 +80,15 @@ type SnapshotFile struct {
 // Kept reports whether the file's text is kept in the history.
 func (f SnapshotFile) Kept() bool { return f.Note == "" }
 
+// Measurement is one number a test tool reported about a result, such as a
+// response time or a rate. The name says what it is and carries its unit
+// ("p95_ms"); the tester does not interpret either. Only numbers are kept, so a
+// measurement can be compared across runs.
+type Measurement struct {
+	Name  string
+	Value float64
+}
+
 // Result is the outcome of one test within a run.
 type Result struct {
 	// TestID is the manifest test id this result belongs to. It is empty when
@@ -98,6 +107,10 @@ type Result struct {
 	// Message is the failure detail or skip reason, already scrubbed of known
 	// secret values.
 	Message string
+	// Measurements are the numbers the test tool reported with this result, in
+	// the order it printed them. Nil when it reported none. They are kept for
+	// passing results too: a load test's numbers matter most when it passes.
+	Measurements []Measurement
 }
 
 // Listed reports whether the result is tied to a test in the manifest.

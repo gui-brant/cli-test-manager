@@ -222,7 +222,7 @@ func (a *app) showRun(ctx context.Context, loaded *manifestfile.Loaded, store *s
 			fmt.Fprintln(a.Stdout, parts.Detail)
 		} else {
 			// Say that it exists and how to see it, so nobody has to guess.
-			fmt.Fprintf(a.Stdout, "%s\nShow it with: tester history %d --detail\n", view.DetailHint, id)
+			fmt.Fprintf(a.Stdout, "%s\nShow it with: tester history %d --detail\n", parts.DetailNote, id)
 		}
 	}
 	return ExitOK

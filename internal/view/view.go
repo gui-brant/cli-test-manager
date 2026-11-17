@@ -5,6 +5,7 @@ package view
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,10 +29,15 @@ type Run struct {
 	// Diagnostic is what the commands themselves printed when one crashed, timed
 	// out or exited with an error. Empty when there is nothing to show.
 	Diagnostic string
-	// Detail is the test tool's own stack traces and error objects for the
-	// failed results. Empty when the run has none. It is long, so a view shows
-	// it only on request.
+	// Detail is what the test tool itself reported beyond the verdicts: the
+	// measurements of every result that has some (a passing load test's numbers
+	// included), then the stack traces and error objects of the failed results.
+	// Empty when the run has neither. It can be long, so a view shows it only on
+	// request.
 	Detail string
+	// DetailNote is one or two sentences saying what the detail holds, shown in
+	// place of it so nobody has to guess that it exists. Empty when Detail is.
+	DetailNote string
 	// HiddenChecks is how many checks of tests that printed several are not
 	// listed in Results, because they passed. Zero when Options.Checks was set
 	// or every check is listed.
@@ -195,10 +201,43 @@ func BuildWith(d query.RunDetail, id int64, loc *time.Location, opts Options) Ru
 	if strings.TrimSpace(run.Diagnostic) != "" {
 		out.Diagnostic = "Diagnostic:\n" + Indent(run.Diagnostic, "  ")
 	}
-	if strings.TrimSpace(run.Detail) != "" {
-		out.Detail = "Tool detail:\n" + Indent(run.Detail, "  ")
+	var detail, notes []string
+	if text, checks, numbers := measurementsText(results); text != "" {
+		detail = append(detail, "Measurements:\n"+text)
+		notes = append(notes, fmt.Sprintf("The test tool reported measurements (%s on %s).",
+			plural(numbers, "number", "numbers"), plural(checks, "check", "checks")))
 	}
+	if strings.TrimSpace(run.Detail) != "" {
+		detail = append(detail, "Tool detail:\n"+Indent(run.Detail, "  "))
+		notes = append(notes, DetailHint)
+	}
+	out.Detail = strings.Join(detail, "\n\n")
+	out.DetailNote = strings.Join(notes, " ")
 	return out
+}
+
+// measurementsText lists the numbers each result carries, one block per result
+// that has some, labelled the way the tool detail labels a failure ("[test id]
+// check name"). It also returns how many results and how many numbers there
+// are. The text is empty when no result has any.
+func measurementsText(results []core.Result) (text string, checks, numbers int) {
+	var b strings.Builder
+	for _, r := range results {
+		if len(r.Measurements) == 0 {
+			continue
+		}
+		checks++
+		numbers += len(r.Measurements)
+		width := 0
+		for _, m := range r.Measurements {
+			width = max(width, len(m.Name))
+		}
+		fmt.Fprintf(&b, "  [%s] %s\n", Dash(r.TestID), r.Name)
+		for _, m := range r.Measurements {
+			fmt.Fprintf(&b, "      %-*s  %s\n", width, m.Name, strconv.FormatFloat(m.Value, 'f', -1, 64))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), checks, numbers
 }
 
 // SnapshotHeader says which run a snapshot is from and what that run was made

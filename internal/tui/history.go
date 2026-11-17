@@ -176,7 +176,7 @@ func (s *runScreen) text() string {
 		if s.showDetail {
 			chunks = append(chunks, s.parts.Detail)
 		} else {
-			chunks = append(chunks, view.DetailHint+" Press d to show it.")
+			chunks = append(chunks, s.parts.DetailNote+" Press d to show it.")
 		}
 	}
 	return strings.Join(chunks, "\n\n")

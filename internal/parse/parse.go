@@ -4,6 +4,9 @@
 package parse
 
 import (
+	"math"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
@@ -34,6 +37,55 @@ type Item struct {
 // MaxMessageBytes caps the message of one result, so a single noisy failure
 // cannot swell the history file.
 const MaxMessageBytes = 2 * 1024
+
+// Limits on the measurements of one result, so a noisy file cannot swell the
+// history. A measurement past the count is dropped; a longer name is cut.
+const (
+	MaxMeasurements         = 64
+	MaxMeasurementNameBytes = 128
+)
+
+// Number reads the text of a measurement's value: a finite number, optionally
+// inside one pair of matching quotes (YAML writes '187' and "187"). Anything
+// else (text, NaN, infinity, an empty value) is not a measurement.
+func Number(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if n := len(s); n >= 2 && (s[0] == '\'' || s[0] == '"') && s[n-1] == s[0] {
+		s = strings.TrimSpace(s[1 : n-1])
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
+}
+
+// AddMeasurement adds one measurement to a result. A name already on the result
+// takes the new value (the way a repeated key in a YAML block does); an empty
+// name, a non-finite value or a result already at the limit adds nothing.
+func AddMeasurement(r *core.Result, name string, value float64) {
+	name = strings.TrimSpace(name)
+	if name == "" || math.IsNaN(value) || math.IsInf(value, 0) {
+		return
+	}
+	if len(name) > MaxMeasurementNameBytes {
+		i := MaxMeasurementNameBytes
+		for i > 0 && !utf8.RuneStart(name[i]) {
+			i--
+		}
+		name = name[:i]
+	}
+	for i := range r.Measurements {
+		if r.Measurements[i].Name == name {
+			r.Measurements[i].Value = value
+			return
+		}
+	}
+	if len(r.Measurements) >= MaxMeasurements {
+		return
+	}
+	r.Measurements = append(r.Measurements, core.Measurement{Name: name, Value: value})
+}
 
 const messageCutMarker = "…[message cut]"
 

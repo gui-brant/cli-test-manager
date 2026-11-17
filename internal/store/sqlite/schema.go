@@ -155,4 +155,18 @@ var migrations = [][]string{
 		`CREATE INDEX run_started ON run (started_at)`,
 		`CREATE INDEX run_state ON run (state)`,
 	},
+	{ // version 6: the numbers a test tool reported with a result (a load test's p95, its rate).
+		// One row per number, in the order the tool printed them. They belong to a
+		// result and go with it (ON DELETE CASCADE), so replacing a run's results
+		// replaces its measurements too. The index on `name` is for reading one
+		// measurement across runs. Nothing is rebuilt: existing runs simply have none.
+		`CREATE TABLE measurement (
+			result_id INTEGER NOT NULL REFERENCES result (id) ON DELETE CASCADE,
+			position  INTEGER NOT NULL,
+			name      TEXT NOT NULL,
+			value     REAL NOT NULL,
+			PRIMARY KEY (result_id, position)
+		)`,
+		`CREATE INDEX measurement_name ON measurement (name)`,
+	},
 }

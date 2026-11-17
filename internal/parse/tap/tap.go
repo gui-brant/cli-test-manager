@@ -3,8 +3,13 @@
 // It reads the common subset: "ok" and "not ok" lines with an optional
 // number, description and SKIP or TODO directive; "1..N" plans, before or
 // after the tests they cover; "#" diagnostics; and "Bail out!". Indented
-// lines (YAML blocks, subtests) are ignored, and so is any other text, so a
-// tool's own log lines around the TAP do no harm.
+// lines (subtests) are ignored, and so is any other text, so a tool's own log
+// lines around the TAP do no harm.
+//
+// One indented thing is read: the YAML block ("---" ... "...") a test may print
+// right after its line. Its flat "key: number" lines become the result's
+// measurements, and the key duration_ms sets the result's duration. Nested
+// lines and values that are not numbers are ignored.
 //
 // A broken stream never discards what came before the break. A plan that does
 // not match, results with no plan, or a bail-out adds an error-status result
@@ -17,9 +22,11 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gui-brant/cli-test-manager/internal/core"
 	"github.com/gui-brant/cli-test-manager/internal/parse"
@@ -34,13 +41,19 @@ var (
 	testRe      = regexp.MustCompile(`^(not ok|ok)\b\s*(\d+)?\s*(.*)$`)
 	directiveRe = regexp.MustCompile(`(?i)^(.*?)\s*#\s*(skip|todo)\w*\s*(.*)$`)
 	bailRe      = regexp.MustCompile(`^Bail out!\s*(.*)$`)
+	// A top-level line of a YAML block: a plain key, a colon, a value.
+	yamlRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_.\-]*)\s*:\s*(.*)$`)
 )
+
+// durationKey is the YAML key that carries how long a test took, in
+// milliseconds (the key Node's test runner uses).
+const durationKey = "duration_ms"
 
 // Parse reads TAP from r. Results read before an error (an unreadable stream,
 // or a line longer than the limit) are still returned alongside it. Format
 // problems inside the TAP are not errors: they become error-status results.
 func Parse(r io.Reader) ([]parse.Item, error) {
-	p := &parser{planned: -1, lastFail: -1}
+	p := &parser{planned: -1, lastFail: -1, last: -1}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLine)
 	for sc.Scan() {
@@ -63,13 +76,64 @@ type parser struct {
 	planned  int // tests the current section's plan promised; -1 when no plan yet
 	seen     int // tests seen in the current section
 	lastFail int // index of the latest failing item, for diagnostics; -1 for none
+
+	last        int    // index of the latest test item, which a YAML block may follow; -1 for none
+	inBlock     bool   // inside a YAML block of that item
+	blockIndent string // the indentation of the block's "---" line: its top-level keys have the same
+}
+
+// indentOf returns the leading whitespace of s.
+func indentOf(s string) string { return s[:len(s)-len(strings.TrimLeft(s, " \t"))] }
+
+// indented handles an indented line: a line of a YAML block, or a subtest,
+// which is ignored. A block opens with "---" right after a test and closes with
+// "..." or at the next line that is not indented.
+func (p *parser) indented(s string) {
+	trimmed := strings.TrimSpace(s)
+	if !p.inBlock {
+		if p.last >= 0 && trimmed == "---" {
+			p.inBlock, p.blockIndent = true, indentOf(s)
+		}
+		return
+	}
+	if trimmed == "..." {
+		p.inBlock, p.last = false, -1 // one block per test
+		return
+	}
+	if indentOf(s) != p.blockIndent {
+		return // nested under a key: not a flat measurement
+	}
+	if m := yamlRe.FindStringSubmatch(trimmed); m != nil {
+		p.measure(m[1], m[2])
+	}
+}
+
+// measure records one top-level key of a block on the test it follows.
+func (p *parser) measure(key, value string) {
+	v, ok := parse.Number(value)
+	if !ok {
+		return
+	}
+	res := &p.items[p.last].Result
+	if key == durationKey {
+		if v >= 0 && v <= float64(math.MaxInt64)/float64(time.Millisecond) {
+			res.Duration = time.Duration(v * float64(time.Millisecond))
+		}
+		return
+	}
+	parse.AddMeasurement(res, key, v)
 }
 
 // line handles one line and reports whether to keep reading.
 func (p *parser) line(s string) bool {
-	if s == "" || s[0] == ' ' || s[0] == '\t' {
-		return true // blank, or indented: a YAML block or a subtest
+	if s == "" {
+		return true
 	}
+	if s[0] == ' ' || s[0] == '\t' {
+		p.indented(s) // a YAML block or a subtest
+		return true
+	}
+	p.inBlock = false // a line that is not indented ends any block
 	if strings.HasPrefix(s, "TAP version") {
 		return true
 	}
@@ -146,6 +210,7 @@ func (p *parser) test(ok bool, num, rest string) {
 	}
 
 	p.items = append(p.items, parse.Item{Result: core.Result{Name: desc, Status: status, Message: msg}})
+	p.last, p.inBlock = len(p.items)-1, false
 	if status == core.StatusFail {
 		p.lastFail = len(p.items) - 1
 	} else {
@@ -176,7 +241,7 @@ func (p *parser) closeSection() {
 	case p.planned < 0 && p.seen > 0:
 		p.addError("TAP plan", fmt.Sprintf("%d tests ran but the stream had no plan line", p.seen))
 	}
-	p.planned, p.seen, p.lastFail = -1, 0, -1
+	p.planned, p.seen, p.lastFail, p.last, p.inBlock = -1, 0, -1, -1, false
 }
 
 func (p *parser) addError(name, msg string) {

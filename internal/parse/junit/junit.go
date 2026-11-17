@@ -1,7 +1,10 @@
 // Package junit parses JUnit XML into results.
 //
 // It reads a <testsuites> or <testsuite> root, nested suites, and each
-// <testcase> with its optional <failure>, <error> and <skipped> child. Input
+// <testcase> with its optional <failure>, <error> and <skipped> child. A
+// <property> inside a test case's <properties> whose value is a number becomes
+// a measurement of that result; properties of a suite describe the run, not a
+// result, and are ignored. Input
 // that is not JUnit XML at all (empty, not XML, a different root element, or
 // malformed) returns an error; the caller turns it into the run's diagnostic.
 package junit
@@ -35,12 +38,20 @@ type suite struct {
 }
 
 type testCase struct {
-	Name      string  `xml:"name,attr"`
-	Classname string  `xml:"classname,attr"`
-	Time      string  `xml:"time,attr"`
-	Failure   *detail `xml:"failure"`
-	Error     *detail `xml:"error"`
-	Skipped   *detail `xml:"skipped"`
+	Name       string     `xml:"name,attr"`
+	Classname  string     `xml:"classname,attr"`
+	Time       string     `xml:"time,attr"`
+	Failure    *detail    `xml:"failure"`
+	Error      *detail    `xml:"error"`
+	Skipped    *detail    `xml:"skipped"`
+	Properties []property `xml:"properties>property"`
+}
+
+// property is one <property name="p95_ms" value="187"/> of a test case. A
+// property whose value is a number is a measurement; any other is ignored.
+type property struct {
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
 }
 
 type detail struct {
@@ -123,6 +134,11 @@ func toItem(s suite, c testCase) parse.Item {
 	}
 
 	res := core.Result{Name: name, Status: core.StatusPass, Duration: duration(c.Time)}
+	for _, p := range c.Properties {
+		if v, ok := parse.Number(p.Value); ok {
+			parse.AddMeasurement(&res, p.Name, v)
+		}
+	}
 	var extra string
 	switch {
 	case c.Error != nil: // a test that could not complete outranks a failed check

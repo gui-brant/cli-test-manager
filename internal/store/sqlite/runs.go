@@ -94,9 +94,34 @@ func (s *Store) SaveRun(ctx context.Context, run core.Run) (int64, error) {
 			return err
 		}
 		defer stmt.Close()
+		// Prepared the first time a result has measurements: most runs have none.
+		var mstmt *sql.Stmt
+		defer func() {
+			if mstmt != nil {
+				mstmt.Close()
+			}
+		}()
 		for i, r := range run.Results {
-			if _, err := stmt.ExecContext(ctx, id, i, r.TestID, r.Feature, r.Name, string(r.Status), int64(r.Duration), r.Message); err != nil {
+			res, err := stmt.ExecContext(ctx, id, i, r.TestID, r.Feature, r.Name, string(r.Status), int64(r.Duration), r.Message)
+			if err != nil {
 				return err
+			}
+			if len(r.Measurements) == 0 {
+				continue
+			}
+			resultID, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			if mstmt == nil {
+				if mstmt, err = conn.PrepareContext(ctx, `INSERT INTO measurement (result_id, position, name, value) VALUES (?, ?, ?, ?)`); err != nil {
+					return err
+				}
+			}
+			for j, m := range r.Measurements {
+				if _, err := mstmt.ExecContext(ctx, resultID, j, m.Name, m.Value); err != nil {
+					return err
+				}
 			}
 		}
 		for i, tool := range run.Tools {
@@ -203,6 +228,32 @@ func (s *Store) loadRun(ctx context.Context, where string, args ...any) (core.Ru
 	}
 	if err := rows.Err(); err != nil {
 		return core.Run{}, fmt.Errorf("store: reading results: %w", err)
+	}
+
+	// The numbers each result carries. A result's position is its index in
+	// run.Results, because positions are saved 0, 1, 2 ... in order.
+	measureRows, err := tx.QueryContext(ctx, `SELECT x.position, m.name, m.value
+		FROM measurement m JOIN result x ON x.id = m.result_id
+		WHERE x.run_id = ? ORDER BY x.position, m.position`, run.ID)
+	if err != nil {
+		return core.Run{}, fmt.Errorf("store: reading measurements: %w", err)
+	}
+	defer measureRows.Close()
+	for measureRows.Next() {
+		var (
+			pos int
+			m   core.Measurement
+		)
+		if err := measureRows.Scan(&pos, &m.Name, &m.Value); err != nil {
+			return core.Run{}, fmt.Errorf("store: reading measurements: %w", err)
+		}
+		if pos < 0 || pos >= len(run.Results) {
+			return core.Run{}, fmt.Errorf("store: run %d: a measurement belongs to result %d, which does not exist", run.ID, pos)
+		}
+		run.Results[pos].Measurements = append(run.Results[pos].Measurements, m)
+	}
+	if err := measureRows.Err(); err != nil {
+		return core.Run{}, fmt.Errorf("store: reading measurements: %w", err)
 	}
 
 	toolRows, err := tx.QueryContext(ctx, `SELECT name, version FROM run_tool WHERE run_id = ? ORDER BY position`, run.ID)

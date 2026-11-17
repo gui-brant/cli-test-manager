@@ -2,7 +2,7 @@
 
 `tester` is a small command-line program that runs a project's tests, keeps their history, and shows it back, in plain commands or in an interactive menu. It knows nothing about any particular project: the project describes its tests in a file it owns, and keeps the history in a file it owns.
 
-- It reads results in two standard formats only, **TAP** and **JUnit XML**. A project whose tests print something else converts it with a small wrapper.
+- It reads results in two standard formats only, **TAP** and **JUnit XML**. A project whose tests print something else converts it with a small wrapper. Besides pass or fail, it keeps the numbers a test reports with a result (see "Measurements").
 - It stores each run in a **SQLite file inside the project** (pure Go, no server).
 - Secrets are passed to the tests from your environment by **name**. The values are scrubbed from everything stored or shown.
 - It starts every command in a few milliseconds, so it is safe to use from a git hook.
@@ -56,13 +56,42 @@ environments:
 - **`--dry-run`** reports the same refusal and exit code, and saves nothing.
 - **Ctrl-C** during a check saves nothing, as everywhere. A check that cannot be started at all (the program is missing) is a mistake in the manifest, reported as an error, not as a refusal.
 
+## Measurements
+
+A load or network tool reports numbers (a response time, a rate, a share of failures), not just pass or fail. The tester keeps them with the result they belong to, for passing results too, so a number can be read back and compared across runs. A wrapper that turns a tool's output into TAP or JUnit puts them in the file:
+
+**TAP:** a YAML block, indented, directly after the test line.
+
+```
+ok 1 - sign-in p95
+  ---
+  duration_ms: 187
+  p95_ms: 187
+  rate_per_s: 101.5
+  ...
+```
+
+**JUnit:** `<property>` elements inside the test case's `<properties>`.
+
+```xml
+<testcase classname="k6" name="sign-in p95" time="0.187">
+  <properties><property name="p95_ms" value="187"/></properties>
+</testcase>
+```
+
+- A measurement is a **name and a number**. The tester does not interpret either; put the unit in the name (`p95_ms`). Values that are not numbers (text, dates, `NaN`) and nested YAML keys are ignored.
+- In TAP, `duration_ms` is the result's duration (as Node's test runner prints it), not a measurement. In JUnit the duration is the `time` attribute, as before.
+- Properties of a JUnit `<testsuite>` are ignored: they describe the run, not a result.
+- At most 64 measurements are kept per result and a name is cut at 128 bytes, so one noisy file cannot swell the history. Within a result, a repeated name takes the last value.
+- They are shown by `tester history <n> --detail` (and the menu's `d` key). The history file stores them in the `measurement` table (schema 6, added by an automatic upgrade; runs saved before it simply have none).
+
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `tester run [--env NAME] [--feature NAME] [--test ID ...] [--changed PATH ... \| -] [--unplayed] [--dry-run] [--trigger manual\|hook] [--yes]` | runs tests and saves the run. `--dry-run` decides what would run and prints one line `would run  <id>` per test (and one `skipped  <id>  (reason)` per test left out), then stops: nothing is started, saved or asked, no history file is created, and it exits 0 whether or not anything would run (2 if the request could not run), so a script can look for those lines. A run of every test asks "Are you sure?" at a terminal; `--yes` skips it, and a hook (no terminal) is never asked, nor is a narrowed run. `--changed` keeps the features the changed files select (their `paths` patterns, the feature of a test whose own file it is, every feature for the manifest, `general` for a file in no feature; `-` reads one path per line from standard input, for example from `git diff --name-only`). `--unplayed` leaves out each test that already passed in this environment with its file as it is now, and lists them with the run that passed them. When the narrowing leaves nothing to run, that is a success: exit 0, nothing saved |
 | `tester history [--env] [--feature] [--source] [--limit] [--offset]` | lists runs, newest first |
-| `tester history <n> [--checks] [--detail]` | shows one run: one row per test with its verdict (a test that printed several checks shows how many and lists only its failed ones; `--checks` lists every check), the diagnostic when a command crashed or timed out, and with `--detail` the test tool's own stack traces |
+| `tester history <n> [--checks] [--detail]` | shows one run: one row per test with its verdict (a test that printed several checks shows how many and lists only its failed ones; `--checks` lists every check), the diagnostic when a command crashed or timed out, and with `--detail` what the test tool itself reported: its measurements, then its stack traces. A run that has either says so under the results |
 | `tester pull` | brings in the results of the workflow's runs that are not in the history yet, stopping at the first run it already has. A run still going is kept as a placeholder and checked again next time; a run whose file expired or is missing is recorded as such. Exit 0 whatever the pulled tests did, 2 if it could not pull |
 | `tester import [--env NAME] [--test ID] [--format junit\|tap] [--commit SHA] [--tool name=version] [--when TIME] <file \| ->` | records a result file that came from outside (the output of a load or network tool the tester never starts) as one run. The environment must allow `import`. Results go to the test their suite or class name points at, or all to `--test`. The same file into the same environment twice is stored once. Exit 0 whatever the results were, 2 if it could not import |
 | `tester tests [--feature NAME]` | lists the tests with their numbers |

@@ -264,7 +264,7 @@ func TestResultWordForEveryStateAndOutcome(t *testing.T) {
 		{core.RunComplete, core.OutcomeFail, "FAIL"},
 		{core.RunPending, core.OutcomeUndetermined, "PENDING"},
 		{core.RunExpired, core.OutcomeUndetermined, "EXPIRED"},
-		{core.RunComplete, core.OutcomeUndetermined, "?"},
+		{core.RunComplete, core.OutcomeUndetermined, "NO RESULTS"},
 	}
 	for _, c := range cases {
 		if got := ResultWord(c.state, c.outcome); got != c.want {

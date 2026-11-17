@@ -332,6 +332,8 @@ func ResultWord(state core.RunState, outcome core.Outcome) string {
 		return "EXPIRED"
 	case state == core.RunRefused:
 		return "NOT RUN"
+	case state == core.RunComplete && outcome == core.OutcomeUndetermined:
+		return "NO RESULTS"
 	case outcome == core.OutcomePass:
 		return "PASS"
 	case outcome == core.OutcomeFail:

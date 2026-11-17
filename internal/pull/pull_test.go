@@ -311,7 +311,7 @@ func TestAnExpiredFileIsRecordedAndNotTriedAgain(t *testing.T) {
 	}
 }
 
-func TestAFinishedRunWithoutAFileIsStoredAsFailedWithTheReason(t *testing.T) {
+func TestAFinishedRunWithoutAFileIsStoredAsUndeterminedWithTheReason(t *testing.T) {
 	src := &fakeSource{pages: [][]core.RemoteRun{{run("5", 1, 5, true)}},
 		files: map[string]any{"5#1": fmt.Errorf("%w: no artifact named %q on run 5", core.ErrNoArtifact, "test-results")}}
 	s, st := newService(t, src)
@@ -321,13 +321,13 @@ func TestAFinishedRunWithoutAFileIsStoredAsFailedWithTheReason(t *testing.T) {
 		t.Fatalf("report %+v", rep)
 	}
 	got := get(t, st, storedRuns(t, st)[0].ID)
-	if got.State != core.RunComplete || len(got.Results) != 0 || got.Verdict().Outcome != core.OutcomeFail ||
+	if got.State != core.RunComplete || len(got.Results) != 0 || got.Verdict().Outcome != core.OutcomeUndetermined ||
 		!strings.Contains(got.Diagnostic, "no artifact named") || !strings.Contains(got.Verdict().Reason, "no artifact named") {
 		t.Errorf("run %+v, verdict %+v", got, got.Verdict())
 	}
 }
 
-func TestAFileThatCannotBeReadIsStoredAsFailedWithTheReason(t *testing.T) {
+func TestAFileThatCannotBeReadIsStoredAsUndeterminedWithTheReason(t *testing.T) {
 	src := &fakeSource{
 		pages: [][]core.RemoteRun{{run("2", 1, 5, true), run("1", 1, 6, true)}},
 		files: map[string]any{
@@ -342,7 +342,7 @@ func TestAFileThatCannotBeReadIsStoredAsFailedWithTheReason(t *testing.T) {
 	}
 	for _, sum := range storedRuns(t, st) {
 		got := get(t, st, sum.ID)
-		if len(got.Results) != 0 || got.Verdict().Outcome != core.OutcomeFail || got.Diagnostic == "" {
+		if len(got.Results) != 0 || got.Verdict().Outcome != core.OutcomeUndetermined || got.Diagnostic == "" {
 			t.Errorf("run %s: %+v", got.ExternalID, got)
 		}
 	}

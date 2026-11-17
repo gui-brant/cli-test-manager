@@ -354,8 +354,9 @@ type Verdict struct {
 //     failure's own cause is in its result.
 //  3. A non-zero exit code from the command fails the run, even if every
 //     parsed result passed (a crash after the last test must not look green).
-//  4. A run with no results at all fails with "no results", so a command that
-//     prints nothing is never shown as a pass.
+//  4. A pulled (remote) run with no results is undetermined: the gap is shown,
+//     not called a failure. A local run with no results at all fails with
+//     "no results", so a command that prints nothing is never shown as a pass.
 //
 // In steps 3 and 4, when the run has a Diagnostic, the reason is the last line
 // of it (the real cause) instead of the generic wording.
@@ -375,6 +376,12 @@ func (r Run) Verdict() Verdict {
 	// the run's reason would hide the others.
 	if failed > 0 {
 		return Verdict{Outcome: OutcomeFail, Reason: fmt.Sprintf("%d of %d tests failed", failed, total)}
+	}
+	// A pulled run with no results is a gap, not a failure: no test was played
+	// that we can see (the pipeline stopped before uploading its result file).
+	// A local run that printed nothing still fails, below.
+	if r.Source == SourceRemote && len(r.Results) == 0 {
+		return Verdict{Outcome: OutcomeUndetermined, Reason: r.reasonOr("no result file")}
 	}
 	if r.ExitCode != 0 {
 		return Verdict{Outcome: OutcomeFail, Reason: r.reasonOr(fmt.Sprintf("command exited with code %d", r.ExitCode))}

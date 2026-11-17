@@ -353,6 +353,8 @@ func (r Run) Verdict() Verdict {
 		return Verdict{Outcome: OutcomeUndetermined, Reason: "run still in progress"}
 	case RunExpired:
 		return Verdict{Outcome: OutcomeUndetermined, Reason: "results expired"}
+	case RunRefused:
+		return Verdict{Outcome: OutcomeUndetermined, Reason: "not run: a precondition was not met"}
 	}
 	total, failed := r.Counts()
 	// Failed tests come first: a count says what happened to the whole run, and

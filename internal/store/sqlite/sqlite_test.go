@@ -518,6 +518,64 @@ func TestAVersion3FileGainsTheSnapshotTables(t *testing.T) {
 	}
 }
 
+// A file from the version before refused runs opens, keeps its runs with their
+// results and files, and can then save a run that was refused. Before the
+// upgrade the old file cannot hold one: its state list does not have 'refused'.
+func TestAVersion4FileGainsTheRefusedState(t *testing.T) {
+	old := migrations
+	t.Cleanup(func() { migrations = old })
+
+	path := newPath(t)
+	migrations = old[:4] // the schema as it was
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withFile := someRun(1)
+	withFile.Files = []core.SnapshotFile{{Path: "a.sql", Role: core.RoleTest, TestID: "a", Hash: "h", Size: 3, Content: []byte("one")}}
+	withFile.Tools = []core.Tool{{Name: "pgtap", Version: "1.3"}}
+	if _, err := s.SaveRun(bg, withFile); err != nil {
+		t.Fatal(err)
+	}
+	refused := someRun(2)
+	refused.State, refused.Results = core.RunRefused, nil
+	if _, err := s.SaveRun(bg, refused); err == nil {
+		t.Fatal("a version 4 file saved a refused run; its state list should not allow it")
+	}
+	s.Close()
+
+	migrations = old // the program as it is now
+	s = openAt(t, path)
+	if got := pragma(t, s.db, "user_version"); got != len(old) {
+		t.Fatalf("version after upgrade = %d; want %d", got, len(old))
+	}
+	kept, err := s.GetRun(bg, 1)
+	if err != nil || len(kept.Results) != 2 || len(kept.Files) != 1 || len(kept.Tools) != 1 {
+		t.Errorf("the old run: %d results, %d files, %d tools, %v; want 2, 1, 1", len(kept.Results), len(kept.Files), len(kept.Tools), err)
+	}
+	if f, err := s.GetSnapshotFile(bg, 1, "a.sql"); err != nil || string(f.Content) != "one" {
+		t.Errorf("the old run's file after the rebuild: %+v, %v", f, err)
+	}
+
+	refused.Diagnostic = "precondition migrations-applied is not met: Run `supabase db reset`\n  the check said: 2 migrations are not applied"
+	refused.Trigger, refused.CommitSHA, refused.Dirty = core.TriggerHook, "abc123", true
+	id, err := s.SaveRun(bg, refused)
+	if err != nil {
+		t.Fatalf("a refused run after the upgrade: %v", err)
+	}
+	got, err := s.GetRun(bg, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != core.RunRefused || len(got.Results) != 0 || got.Diagnostic != refused.Diagnostic ||
+		got.Trigger != core.TriggerHook || got.CommitSHA != "abc123" || !got.Dirty {
+		t.Errorf("the refused run read back as %+v", got)
+	}
+	if v := got.Verdict(); v.Outcome != core.OutcomeUndetermined {
+		t.Errorf("a refused run's outcome = %q; want %q (it is neither a pass nor a fail)", v.Outcome, core.OutcomeUndetermined)
+	}
+}
+
 func TestDeletingARunDeletesItsResults(t *testing.T) {
 	s := openAt(t, newPath(t))
 	id, err := s.SaveRun(bg, someRun(1))

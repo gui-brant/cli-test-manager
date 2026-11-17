@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -38,6 +39,7 @@ func Validate(m *core.Manifest) []error {
 	v.environments()
 	v.runners()
 	v.tests()
+	v.preconditions()
 	v.pull()
 	return v.errs
 }
@@ -309,6 +311,60 @@ func (v *validator) tests() {
 		} else {
 			files[t.File] = i
 		}
+	}
+}
+
+// preconditions checks the preconditions of every environment, runner and test.
+// A name used in more than one place must mean one thing everywhere, because
+// the run checks it once and shows its message once.
+func (v *validator) preconditions() {
+	defined := make(map[string]core.Precondition) // name -> its first definition
+	where := make(map[string]string)              // name -> where that was
+	list := func(at string, ps []core.Precondition) {
+		seen := make(map[string]bool)
+		for i, p := range ps {
+			here := fmt.Sprintf("%s.preconditions[%d]", at, i)
+			switch {
+			case p.Name == "":
+				v.add(here, "the name is required")
+			case !namePattern.MatchString(p.Name):
+				v.add(here, "%q is not a valid name (lowercase letters, digits, hyphen, underscore)", p.Name)
+			case seen[p.Name]:
+				v.add(here, "%q is listed twice", p.Name)
+			}
+			seen[p.Name] = true
+			switch {
+			case len(p.Check) == 0:
+				v.add(here+".check", "the command is empty")
+			case strings.TrimSpace(p.Check[0]) == "":
+				v.add(here+".check[0]", "the program name is empty")
+			}
+			for j, a := range p.Check {
+				if strings.Contains(a, core.PlaceholderFiles) || strings.Contains(a, core.PlaceholderReport) {
+					v.add(fmt.Sprintf("%s.check[%d]", here, j), "a check takes no placeholders")
+				}
+			}
+			if strings.TrimSpace(p.Message) == "" {
+				v.add(here+".message", "is required: it tells the person what to do")
+			}
+			if p.Name == "" {
+				continue
+			}
+			if first, ok := defined[p.Name]; !ok {
+				defined[p.Name], where[p.Name] = p, here
+			} else if first.Message != p.Message || !slices.Equal(first.Check, p.Check) {
+				v.add(here, "%q is defined differently at %s; a name stands for one definition", p.Name, where[p.Name])
+			}
+		}
+	}
+	for _, name := range sortedKeys(v.m.Environments) {
+		list("environments."+name, v.m.Environments[name].Preconditions)
+	}
+	for _, name := range sortedKeys(v.m.Runners) {
+		list("runners."+name, v.m.Runners[name].Preconditions)
+	}
+	for i, t := range v.m.Tests {
+		list(fmt.Sprintf("tests[%d] (%s)", i, t.ID), t.Preconditions)
 	}
 }
 

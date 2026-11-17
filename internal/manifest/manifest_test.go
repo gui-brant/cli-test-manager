@@ -32,6 +32,59 @@ runners:
 
 func parseString(s string) (*core.Manifest, error) { return Parse(strings.NewReader(s)) }
 
+// Preconditions are written in the manifest on an environment, a runner and a
+// test, and read strictly like the rest: a misspelt key is an error.
+func TestParsePreconditions(t *testing.T) {
+	text := base + `
+    preconditions:
+      - name: function-served
+        check: ["check-function"]
+        message: "Serve the function."
+tests:
+  - id: t-one
+    name: One
+    feature: a
+    runner: r
+    file: t/one
+    preconditions:
+      - name: seed-loaded
+        check: ["check-seed", "--quiet"]
+        message: "Run the seed."
+`
+	// The environment's own list replaces its one-line form.
+	text = strings.Replace(text, "local: { vars: {}, secrets: [] }", `local:
+    vars: {}
+    secrets: []
+    preconditions:
+      - name: migrations-applied
+        check: ["check-migrations"]
+        message: "Run db reset."`, 1)
+	m, err := parseString(text)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if errs := Validate(m); len(errs) != 0 {
+		t.Fatalf("problems:\n%v", Report(errs))
+	}
+	want := core.Precondition{Name: "migrations-applied", Check: []string{"check-migrations"}, Message: "Run db reset."}
+	if got := m.Environments["local"].Preconditions; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("environment preconditions = %+v; want %+v", got, want)
+	}
+	if got := m.Runners["r"].Preconditions; len(got) != 1 || got[0].Name != "function-served" {
+		t.Errorf("runner preconditions = %+v", got)
+	}
+	if got := m.Tests[0].Preconditions; len(got) != 1 || !reflect.DeepEqual(got[0].Check, []string{"check-seed", "--quiet"}) {
+		t.Errorf("test preconditions = %+v", got)
+	}
+
+	// A misspelt key is refused, not ignored: a precondition that silently does
+	// nothing would let a run start on a database that is not ready.
+	typo := strings.Replace(text, `check: ["check-seed", "--quiet"]`, `chek: ["check-seed"]`, 1)
+	if _, err := parseString(typo); err == nil {
+		t.Error("a precondition with a misspelt key was accepted")
+	}
+}
+
 func TestParseExampleFile(t *testing.T) {
 	f, err := os.Open(examplePath)
 	if err != nil {

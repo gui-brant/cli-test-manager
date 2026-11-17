@@ -127,6 +127,10 @@ type Report struct {
 	// Changed says how the changed files mapped to features, when the selection
 	// used them.
 	Changed *ChangedSummary
+	// Refused lists the preconditions that were not met. When it is not empty
+	// nothing was started: Run holds the run that was not made (State
+	// core.RunRefused, no results), and Saved says whether it was stored.
+	Refused []Refusal
 }
 
 // plan is everything checked and prepared before the first command starts.
@@ -164,6 +168,15 @@ func (s *Service) Run(ctx context.Context, req Request) (Report, error) {
 	// Nothing is started or saved, so no history file is needed either.
 	if len(p.tests) == 0 {
 		return Report{Skipped: p.skipped, NothingToRun: true, Changed: p.changed}, nil
+	}
+	// Something the person must do first: start nothing, and save that the run
+	// was asked for and why it did not start.
+	refusals, err := s.unmet(ctx, req, p)
+	if err != nil {
+		return Report{}, err
+	}
+	if len(refusals) > 0 {
+		return s.refuse(ctx, req, p, refusals)
 	}
 
 	run := core.Run{Source: core.SourceLocal, Environment: req.Environment, State: core.RunComplete, StartedAt: s.now()}
@@ -273,6 +286,9 @@ type Preview struct {
 	// Changed says how the changed files mapped to features, when the selection
 	// used them.
 	Changed *ChangedSummary
+	// Refused lists the preconditions of the tests that would run which are not
+	// met. When it is not empty, Run would refuse to start.
+	Refused []Refusal
 }
 
 // Preview makes every check that Run makes before its first command: the
@@ -284,7 +300,13 @@ func (s *Service) Preview(ctx context.Context, req Request) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	return Preview{Tests: p.tests, Skipped: p.skipped, Changed: p.changed}, nil
+	pv := Preview{Tests: p.tests, Skipped: p.skipped, Changed: p.changed}
+	if len(p.tests) > 0 {
+		if pv.Refused, err = s.unmet(ctx, req, p); err != nil {
+			return Preview{}, err
+		}
+	}
+	return pv, nil
 }
 
 // prepare checks the request and builds what the run needs. It starts

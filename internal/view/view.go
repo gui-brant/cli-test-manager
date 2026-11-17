@@ -291,6 +291,8 @@ func ResultWord(state core.RunState, outcome core.Outcome) string {
 		return "PENDING"
 	case state == core.RunExpired:
 		return "EXPIRED"
+	case state == core.RunRefused:
+		return "NOT RUN"
 	case outcome == core.OutcomePass:
 		return "PASS"
 	case outcome == core.OutcomeFail:

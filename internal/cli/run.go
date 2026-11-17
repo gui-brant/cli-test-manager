@@ -140,6 +140,11 @@ Flags:
 		return ExitOK
 	}
 	if *dryRun {
+		if len(preview.Refused) > 0 {
+			fmt.Fprintf(a.Stderr, "tester: a run would not start: %s not met:\n\n%s\n\nDry run: nothing was started or saved.\n",
+				plural(len(preview.Refused), "precondition is", "preconditions are"), execute.RefusalText(preview.Refused))
+			return ExitError
+		}
 		for _, sk := range preview.Skipped {
 			fmt.Fprintf(a.Stdout, "skipped  %s  (%s)\n", sk.Test.ID, sk.Reason)
 		}
@@ -153,7 +158,8 @@ Flags:
 	// A run of every test asks first, but only a person at a terminal can
 	// answer: a push hook's input is a pipe, so a hook is never asked. A run that
 	// is narrowed by --test, --feature, --changed or --unplayed is not "every test".
-	if len(ids) == 0 && *feature == "" && !useChanged && !*unplayed && !*yes && a.IsTerminal {
+	// A run that cannot start (a precondition is not met) is never asked about.
+	if len(ids) == 0 && *feature == "" && !useChanged && !*unplayed && !*yes && a.IsTerminal && len(preview.Refused) == 0 {
 		if !a.confirm(ctx, confirmationQuestion(preview, envName)) {
 			if ctx.Err() != nil { // Ctrl-C at the question is a cancel, not a "no"
 				fmt.Fprintln(a.Stderr, "\ntester: cancelled; nothing was run")
@@ -279,6 +285,8 @@ func (a *app) finishRun(m *core.Manifest, rep execute.Report, err error) int {
 		fmt.Fprintln(a.Stdout) // end the unfinished progress line
 		fmt.Fprintf(a.Stderr, "tester: %v\n", err)
 		return ExitCancelled
+	case len(rep.Refused) > 0:
+		return a.finishRefused(rep, err)
 	case err != nil && len(rep.Run.Results) == 0:
 		return a.errorf("%v", err) // a problem found before anything ran
 	}
@@ -292,6 +300,21 @@ func (a *app) finishRun(m *core.Manifest, rep execute.Report, err error) int {
 		return ExitOK
 	}
 	return ExitFailed
+}
+
+// finishRefused reports a run that was not started because something the person
+// must do first has not been done: what to do, then where the refusal was
+// recorded. The tester never does it for them, and it exits 2, so a push hook
+// stops the push.
+func (a *app) finishRefused(rep execute.Report, err error) int {
+	fmt.Fprintf(a.Stderr, "tester: nothing was run: %s not met:\n\n%s\n", plural(len(rep.Refused), "precondition is", "preconditions are"), execute.RefusalText(rep.Refused))
+	if rep.Saved {
+		fmt.Fprintf(a.Stderr, "\nRecorded as run %d (tester history %d). Do what it says, then run again.\n", rep.RunID, rep.RunID)
+	}
+	if err != nil { // the refusal could not be recorded
+		fmt.Fprintf(a.Stderr, "tester: %v\n", err)
+	}
+	return ExitError
 }
 
 func (a *app) printSummary(m *core.Manifest, rep execute.Report) {

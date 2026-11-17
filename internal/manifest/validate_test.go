@@ -227,6 +227,115 @@ func TestValidateRejects(t *testing.T) {
 	}
 }
 
+var (
+	okMigrations = core.Precondition{Name: "migrations-applied", Check: []string{"check-migrations", "--local"}, Message: "Run `db reset`."}
+	okServed     = core.Precondition{Name: "function-served", Check: []string{"check-function"}, Message: "Serve the function."}
+)
+
+func TestValidateAcceptsPreconditions(t *testing.T) {
+	cases := map[string]func(*core.Manifest){
+		"on an environment": func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Preconditions = []core.Precondition{okMigrations} })
+		},
+		"on a runner": func(m *core.Manifest) {
+			withRunner(m, "http", func(r *core.RunnerSpec) { r.Preconditions = []core.Precondition{okServed} })
+		},
+		"on a test": func(m *core.Manifest) { m.Tests[1].Preconditions = []core.Precondition{okServed} },
+		"all three at once, each different": func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Preconditions = []core.Precondition{okMigrations} })
+			withRunner(m, "http", func(r *core.RunnerSpec) { r.Preconditions = []core.Precondition{okServed} })
+			m.Tests[0].Preconditions = []core.Precondition{{Name: "seed-loaded", Check: []string{"check-seed"}, Message: "Run the seed."}}
+		},
+		"the same precondition in several places, defined once": func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Preconditions = []core.Precondition{okMigrations} })
+			withRunner(m, "sql", func(r *core.RunnerSpec) { r.Preconditions = []core.Precondition{okMigrations} })
+			m.Tests[0].Preconditions = []core.Precondition{okMigrations}
+		},
+	}
+	for name, mutate := range cases {
+		m := valid()
+		mutate(m)
+		if errs := Validate(m); len(errs) != 0 {
+			t.Errorf("%s: unexpected problems:\n%v", name, Report(errs))
+		}
+	}
+}
+
+func TestValidateRejectsBadPreconditions(t *testing.T) {
+	on := func(m *core.Manifest, ps ...core.Precondition) {
+		withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Preconditions = ps })
+	}
+	cases := []struct {
+		name   string
+		mutate func(*core.Manifest)
+		want   string
+	}{
+		{"no name", func(m *core.Manifest) {
+			on(m, core.Precondition{Check: []string{"c"}, Message: "m"})
+		}, "environments.local.preconditions[0]: the name is required"},
+		{"a bad name", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "Bad Name", Check: []string{"c"}, Message: "m"})
+		}, `"Bad Name" is not a valid name`},
+		{"listed twice in one place", func(m *core.Manifest) { on(m, okMigrations, okMigrations) }, `"migrations-applied" is listed twice`},
+		{"no check command", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Message: "m"})
+		}, "environments.local.preconditions[0].check: the command is empty"},
+		{"a blank program name", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Check: []string{"  ", "arg"}, Message: "m"})
+		}, "check[0]: the program name is empty"},
+		{"a files placeholder in a check", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Check: []string{"c", "{files}"}, Message: "m"})
+		}, "check[1]: a check takes no placeholders"},
+		{"a report placeholder in a check", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Check: []string{"c", "--out={report}"}, Message: "m"})
+		}, "a check takes no placeholders"},
+		{"no message", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Check: []string{"c"}})
+		}, "message: is required: it tells the person what to do"},
+		{"a blank message", func(m *core.Manifest) {
+			on(m, core.Precondition{Name: "x", Check: []string{"c"}, Message: "   "})
+		}, "message: is required"},
+		{"one name, two different checks", func(m *core.Manifest) {
+			on(m, okMigrations)
+			other := okMigrations
+			other.Check = []string{"check-migrations", "--remote"}
+			withRunner(m, "http", func(r *core.RunnerSpec) { r.Preconditions = []core.Precondition{other} })
+		}, `"migrations-applied" is defined differently at environments.local.preconditions[0]`},
+		{"one name, two different messages", func(m *core.Manifest) {
+			on(m, okMigrations)
+			other := okMigrations
+			other.Message = "Something else."
+			m.Tests[0].Preconditions = []core.Precondition{other}
+		}, "a name stands for one definition"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := valid()
+			c.mutate(m)
+			errs := Validate(m)
+			if !containsError(errs, c.want) {
+				t.Errorf("no problem contains %q; got:\n%v", c.want, Report(errs))
+			}
+		})
+	}
+}
+
+func TestValidateReportsEveryPreconditionProblemAtOnce(t *testing.T) {
+	m := valid()
+	withEnv(m, "local", func(e *core.EnvironmentSpec) {
+		e.Preconditions = []core.Precondition{{Name: "", Check: nil, Message: ""}}
+	})
+	withRunner(m, "http", func(r *core.RunnerSpec) {
+		r.Preconditions = []core.Precondition{{Name: "ok-name", Check: []string{"c", "{files}"}, Message: "m"}}
+	})
+	errs := Validate(m)
+	for _, want := range []string{"the name is required", "the command is empty", "message: is required", "a check takes no placeholders"} {
+		if !containsError(errs, want) {
+			t.Errorf("no problem contains %q; got:\n%v", want, Report(errs))
+		}
+	}
+}
+
 func TestValidatePaths(t *testing.T) {
 	for _, bad := range []string{"", "/abs", "../x", "..", "a/../../b", "a//b", "./a", "a/", "."} {
 		m := valid()

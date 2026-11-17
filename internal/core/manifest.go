@@ -101,6 +101,27 @@ type EnvironmentSpec struct {
 	// Secrets are the NAMES of secret variables. Values are read through the
 	// credentials interface at run time and are never in the manifest.
 	Secrets []string `yaml:"secrets"`
+	// Preconditions must hold before any test of this environment starts.
+	Preconditions []Precondition `yaml:"preconditions,omitempty"`
+}
+
+// Precondition is something the person must have done before tests can run: a
+// database brought up to date, a service started. The tester never does it. It
+// runs the check, and when the check fails it starts nothing, saves a run that
+// says it was not made and why, and shows the message.
+type Precondition struct {
+	// Name identifies the precondition: lowercase letters, digits and hyphens.
+	// A name used in several places stands for one definition, and its check
+	// runs once per run.
+	Name string `yaml:"name"`
+	// Check is a command as an argument list, with no shell. Exit code 0 means
+	// the precondition holds, anything else that it does not. It runs in the
+	// project folder with the run's environment, and must be quick and safe to
+	// run any number of times: it only looks, it changes nothing.
+	Check []string `yaml:"check"`
+	// Message tells the person what to do, in their words ("Run `supabase db
+	// reset`"). It is shown whenever the check fails.
+	Message string `yaml:"message"`
 }
 
 // RunnerSpec says how to start tests of one kind.
@@ -124,6 +145,8 @@ type RunnerSpec struct {
 	// prints the version of the tool this runner starts. Its first line is
 	// recorded with every run.
 	Version []string `yaml:"version,omitempty"`
+	// Preconditions must hold before any test of this runner starts.
+	Preconditions []Precondition `yaml:"preconditions,omitempty"`
 }
 
 // TestSpec is one entry of the test list.
@@ -142,6 +165,9 @@ type TestSpec struct {
 	File string `yaml:"file"`
 	// Tag says how the test was made (free text for now).
 	Tag string `yaml:"tag,omitempty"`
+	// Preconditions must hold before this test starts. They are checked only
+	// when the test is about to run.
+	Preconditions []Precondition `yaml:"preconditions,omitempty"`
 }
 
 // PullSpec says where results produced elsewhere can be fetched.

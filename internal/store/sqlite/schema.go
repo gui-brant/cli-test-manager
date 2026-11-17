@@ -118,4 +118,41 @@ var migrations = [][]string{
 		)`,
 		`CREATE INDEX run_file_test ON run_file (test_id) WHERE test_id <> ''`,
 	},
+	{ // version 5: a run that was refused (a precondition was not met) has the state 'refused'.
+		// The CHECK on `state` lists the allowed states and SQLite cannot change a
+		// CHECK in place, so `run` is rebuilt the same way version 3 did it: create
+		// the new table, copy every column, drop the old, rename. migrate() has
+		// foreign keys off for the step, so dropping `run` does not cascade into
+		// `result`, `run_tool` or `run_file`, and checks them again before commit.
+		`CREATE TABLE run_new (
+			id           INTEGER PRIMARY KEY,
+			source       TEXT NOT NULL,
+			environment  TEXT NOT NULL,
+			state        TEXT NOT NULL CHECK (state IN ('pending', 'complete', 'expired', 'refused')),
+			started_at   TEXT NOT NULL,
+			finished_at  TEXT NOT NULL,
+			exit_code    INTEGER NOT NULL,
+			external_id  TEXT NOT NULL,
+			attempt      INTEGER NOT NULL,
+			commit_sha   TEXT NOT NULL,
+			diagnostic   TEXT NOT NULL,
+			outcome      TEXT NOT NULL CHECK (outcome IN ('pass', 'fail', 'undetermined')),
+			reason       TEXT NOT NULL,
+			total        INTEGER NOT NULL,
+			failed       INTEGER NOT NULL,
+			detail       TEXT NOT NULL DEFAULT '',
+			dirty        INTEGER NOT NULL DEFAULT 0,
+			trigger_name TEXT NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO run_new (id, source, environment, state, started_at, finished_at, exit_code,
+				external_id, attempt, commit_sha, diagnostic, outcome, reason, total, failed, detail, dirty, trigger_name)
+			SELECT id, source, environment, state, started_at, finished_at, exit_code,
+				external_id, attempt, commit_sha, diagnostic, outcome, reason, total, failed, detail, dirty, trigger_name
+			FROM run`,
+		`DROP TABLE run`,
+		`ALTER TABLE run_new RENAME TO run`,
+		`CREATE UNIQUE INDEX run_key ON run (external_id, attempt) WHERE external_id <> ''`,
+		`CREATE INDEX run_started ON run (started_at)`,
+		`CREATE INDEX run_state ON run (state)`,
+	},
 }

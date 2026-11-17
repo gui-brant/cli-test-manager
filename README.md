@@ -30,9 +30,31 @@ A project puts a `test-manifest.yaml` at its root. `examples/test-manifest.yaml`
 | `pull` | optional: where results produced elsewhere come from. The GitHub `repo` (`owner/name`), the `workflow`, the `artifact` name, the `environment` those results belong to (it must allow `pull`), `lookback_days` for the first pull, and `token`: the **name** of the environment variable holding a GitHub token that can read the repository's Actions (never listed as an environment secret, so tests never receive it) |
 | `tests` | the tests, in order. The order is the numbering and is append-only, so history stays readable. Each has an `id` that never changes, a `name`, a `feature`, a `runner`, a `file` and an optional `tag` |
 
+| `preconditions` | optional, inside an environment, a runner or a test: what the person must have done before those tests can run. Each has a `name`, a `check` (a command as an argument list, no shell; exit 0 means ready) and a `message` telling the person what to do. See "Preconditions" below |
+
 The tester looks for the manifest in the current folder and the folders above it, unless `--manifest PATH` names it (a file or a folder).
 
 `tester check` validates the manifest and that every test file exists.
+
+## Preconditions
+
+Some things only the person can do first: bring the database up to date, start a service. The tester never does them, because it knows nothing of the project's tools. It checks, and when something is missing it **starts nothing**, says what to do, and records that the run was refused.
+
+```yaml
+environments:
+  local:
+    preconditions:
+      - name: migrations-applied
+        check: ["bash", "scripts/check-migrations-applied.sh"]
+        message: "Run `supabase db reset`, then run again."
+```
+
+- **Where.** On an environment (checked before any test of it), on a runner (before any test of it) or on a test. Only the tests that are about to run count: a precondition of a test that was left out by `--test`, `--feature`, `--changed` or `--unplayed` is not checked. The same name in several places must mean one definition, and its check runs once.
+- **The check** runs in the project folder with the environment the tests get, and stops after 30 seconds (which counts as not met). It must only look, never change anything: it can run more than once, because `run` checks before it asks "Are you sure?" and again before it starts. What it printed first (or its exit code) is shown as "the check said".
+- **When one is not met**, nothing starts. Every precondition that is not met is listed together, with its message. The run is saved as a run with no results, shown as `NOT RUN` in `tester history`, with the commit, the trigger and the reasons. The command exits with **2**, so a push hook stops the push. No question is asked about a run that cannot start.
+- **A refusal is not a pass or a fail.** It counts as no test being played: `--unplayed` and `counts` ignore it.
+- **`--dry-run`** reports the same refusal and exit code, and saves nothing.
+- **Ctrl-C** during a check saves nothing, as everywhere. A check that cannot be started at all (the program is missing) is a mistake in the manifest, reported as an error, not as a refusal.
 
 ## Commands
 
@@ -51,9 +73,9 @@ The tester looks for the manifest in the current folder and the folders above it
 | `tester projects list \| add \| rename \| remove` | manages the list of projects the program knows (below) |
 | `tester menu` | opens the interactive menu (needs a terminal) |
 
-Exit codes: 0 all passed, 1 a test failed, 2 could not run or a wrong request, 130 cancelled.
+Exit codes: 0 all passed, 1 a test failed, 2 could not run (a wrong request, or a precondition that is not met), 130 cancelled.
 
-A run saves **nothing** when it is cancelled (Ctrl-C), so history only ever holds complete runs.
+A run saves **nothing** when it is cancelled (Ctrl-C), so history only ever holds complete runs. The one other kind of row is a run that was **refused** because a precondition was not met: it shows as `NOT RUN`, has no results, and says why.
 
 ## The list of projects
 

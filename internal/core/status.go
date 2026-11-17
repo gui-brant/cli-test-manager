@@ -49,12 +49,19 @@ const (
 	// cannot be recovered. Stored with no results so the gap stays visible and
 	// the run is not retried.
 	RunExpired RunState = "expired"
+	// RunRefused: the tester did not start the run because a precondition of
+	// the project was not met (the database not migrated, a service not
+	// started). It is stored with no results, and with the reason in its
+	// diagnostic, so the history shows that the run was not made and why. It
+	// is not a run that failed, and it never counts as a test having been
+	// played.
+	RunRefused RunState = "refused"
 )
 
 // ParseRunState converts a stored name into a RunState, exactly.
 func ParseRunState(s string) (RunState, error) {
 	switch st := RunState(s); st {
-	case RunPending, RunComplete, RunExpired:
+	case RunPending, RunComplete, RunExpired, RunRefused:
 		return st, nil
 	}
 	return "", fmt.Errorf("core: unknown run state %q", s)

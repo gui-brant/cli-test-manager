@@ -249,11 +249,12 @@ func (p *progressScreen) start() tea.Cmd {
 	}
 	ctx, p.cancel = context.WithCancel(ctx)
 	p.events = make(chan tea.Msg, 64)
-	events, req, sel := p.events, p.req, p.sel
+	events, req, sel, refused := p.events, p.req, p.sel, p.preview.Refused
 	go func() {
 		store, err := sel.deps.Save(sel.loaded.HistoryPath)
 		if err != nil {
-			events <- runDone{err: err}
+			// The history cannot be opened. If the run would have been refused, the person must still be told what to do.
+			events <- runDone{rep: execute.Report{Refused: refused}, err: err}
 			return
 		}
 		defer store.Close()
@@ -320,6 +321,14 @@ func (p *progressScreen) finish(d runDone) (screen, nav, tea.Cmd) {
 		p.status = fmt.Sprintf("Run %d was saved, but it cannot be shown: %v", d.rep.RunID, err)
 	case errors.Is(d.err, context.Canceled):
 		p.status = "The run was cancelled; nothing was saved."
+	case len(d.rep.Refused) > 0:
+		// Refused, and the refusal could not be saved: the person must still be told what to do.
+		noun := "precondition is"
+		if len(d.rep.Refused) > 1 {
+			noun = "preconditions are"
+		}
+		p.status = fmt.Sprintf("Nothing was run: %d %s not met.\n\n%s\n\nThe refusal could not be recorded: %v",
+			len(d.rep.Refused), noun, execute.RefusalText(d.rep.Refused), strings.TrimPrefix(fmt.Sprint(d.err), "execute: "))
 	case len(d.rep.Run.Results) > 0:
 		p.status = fmt.Sprintf("The tests ran but the run could not be saved: %v", strings.TrimPrefix(fmt.Sprint(d.err), "execute: "))
 	default:

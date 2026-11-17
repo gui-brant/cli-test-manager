@@ -334,6 +334,12 @@ func (s *actionScreen) update(msg tea.Msg) (screen, nav, tea.Cmd) {
 					s.status = err.Error()
 					return s, nav{}, nil
 				}
+				// A run that cannot start (a precondition is not met) is not asked about, as on the command line: it
+				// starts, is refused and recorded, and the saved run shows what the person must do.
+				if len(next.preview.Refused) > 0 {
+					p := newProgressScreen(next.sel, next.req, next.preview)
+					return s, nav{push: p}, p.start()
+				}
 				return s, nav{push: next}, nil
 			case s.pick.items[i].label == "Run several":
 				next, err := newSeveralScreen(s.sel)

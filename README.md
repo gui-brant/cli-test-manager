@@ -96,7 +96,7 @@ The program keeps one small file, `projects.yaml`, in your config folder (`teste
 | Run history | the runs of that feature in that environment. `Enter` opens one: its results, its diagnostic, and `c` shows every check of a test that printed several, `d` shows or hides the test tool's detail |
 | Counts | each test's runs, passes and failures, and its last result |
 | Tests | the tests of the feature. `Enter` shows a test's code with line numbers |
-| Run all | asks first, with the real count (`Run 8 of 9 tests ... (1 skipped)`), then runs |
+| Run all | asks first, with the real count (`Run 8 of 9 tests ... (1 skipped)`), then runs. When a precondition is not met it does not ask: the run is refused and recorded, and the saved run's screen shows `NOT RUN` with what to do (if even the history cannot be written, the screen says what to do and that it could not be recorded) |
 | Run several | tick tests with space (`a` for all), `Enter` runs the ticked ones |
 | Running | lists tests as they finish. `Esc` or Ctrl-C stops it and saves nothing |
 

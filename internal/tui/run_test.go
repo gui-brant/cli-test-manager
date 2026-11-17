@@ -50,7 +50,13 @@ func (noCreds) Get(context.Context, string) (string, error) { return "", core.Er
 // runMenu is historyMenu with what running tests needs.
 func runMenu(t *testing.T, r core.Runner) (m *Model, historyFile string) {
 	t.Helper()
-	m, historyFile, _ = historyMenu(t, twoEnvironments)
+	return runMenuFor(t, twoEnvironments, r)
+}
+
+// runMenuFor is runMenu for another manifest.
+func runMenuFor(t *testing.T, manifest string, r core.Runner) (m *Model, historyFile string) {
+	t.Helper()
+	m, historyFile, _ = historyMenu(t, manifest)
 	m.deps.Runner, m.deps.Creds = r, noCreds{}
 	m.deps.Environ = func() []string { return nil }
 	m.deps.Save = func(path string) (core.Store, error) {
@@ -233,6 +239,110 @@ func TestARunThatCannotBeSavedSaysSo(t *testing.T) {
 	_, cmd := m.Update(key("y"))
 	pump(m, cmd)
 	mustContain(t, "progress", m.View(), "The run stopped", "the disk is full")
+}
+
+// ---- a precondition that is not met ----
+
+// withMigrationsCheck is the two-environment project with a precondition on local.
+var withMigrationsCheck = strings.Replace(twoEnvironments, "  local: {}\n",
+	"  local:\n    preconditions:\n      - name: migrations-applied\n        check: [\"check-migrations\"]\n"+
+		"        message: \"Run `db reset` first.\"\n", 1)
+
+// checkingRunner answers the precondition's check as ready or not, and every
+// other command with one passing TAP result. It counts the test commands.
+type checkingRunner struct {
+	mu     sync.Mutex
+	ready  bool
+	checks int
+	tests  int
+}
+
+func (r *checkingRunner) Run(_ context.Context, inv core.Invocation) (core.Output, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if inv.Args[0] == "check-migrations" {
+		r.checks++
+		if r.ready {
+			return core.Output{Stdout: []byte("all applied\n")}, nil
+		}
+		return core.Output{ExitCode: 1, Stdout: []byte("2 migrations are not applied\n")}, nil
+	}
+	r.tests++
+	return core.Output{Stdout: []byte("1..1\nok 1 - fine\n")}, nil
+}
+
+func (r *checkingRunner) testCommands() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tests
+}
+
+func TestRunAllIsNotAskedAboutWhenAPreconditionIsNotMet(t *testing.T) {
+	r := &checkingRunner{}
+	m, file := runMenuFor(t, withMigrationsCheck, r)
+	toActions(m, 0)
+	cmd := press(m, "down", "down", "down", "enter")
+	if _, ok := top(m).(*confirmScreen); ok {
+		t.Fatal("a run that cannot start was asked about: the question was shown")
+	}
+	pump(m, cmd)
+
+	if r.testCommands() != 0 {
+		t.Errorf("%d test commands started; a refused run starts none", r.testCommands())
+	}
+	if _, ok := top(m).(*runScreen); !ok {
+		t.Fatalf("top screen is %T; want the saved run that records the refusal", top(m))
+	}
+	mustContain(t, "run", m.View(), "Run 1  NOT RUN", "Run `db reset` first.", "2 migrations are not applied")
+	if strings.Contains(m.View(), "(y/N)") {
+		t.Errorf("the question appeared:\n%s", m.View())
+	}
+	if n := storedRuns(t, file); n != 1 {
+		t.Errorf("%d runs saved; want the one refusal", n)
+	}
+}
+
+func TestRunSeveralWithAPreconditionNotMetIsRefusedAndRecorded(t *testing.T) {
+	r := &checkingRunner{}
+	m, file := runMenuFor(t, withMigrationsCheck, r)
+	toActions(m, 0)
+	press(m, "down", "down", "down", "down", "enter")
+	press(m, "a")
+	pump(m, press(m, "enter"))
+
+	if r.testCommands() != 0 {
+		t.Errorf("%d test commands started; a refused run starts none", r.testCommands())
+	}
+	mustContain(t, "run", m.View(), "NOT RUN", "Run `db reset` first.")
+	if n := storedRuns(t, file); n != 1 {
+		t.Errorf("%d runs saved; want the one refusal", n)
+	}
+}
+
+func TestARefusalThatCannotBeSavedStillSaysWhatToDo(t *testing.T) {
+	r := &checkingRunner{}
+	m, _ := runMenuFor(t, withMigrationsCheck, r)
+	m.deps.Save = func(string) (core.Store, error) { return nil, errors.New("the disk is full") }
+	m.stack = []screen{newChooser(m.deps)}
+	toActions(m, 0)
+	pump(m, press(m, "down", "down", "down", "enter"))
+	mustContain(t, "progress", m.View(), "Nothing was run: 1 precondition is not met", "Run `db reset` first.", "could not be recorded")
+}
+
+func TestAMetPreconditionStillAsksBeforeRunningEverything(t *testing.T) {
+	r := &checkingRunner{ready: true}
+	m, _ := runMenuFor(t, withMigrationsCheck, r)
+	toActions(m, 0)
+	press(m, "down", "down", "down", "enter")
+	if _, ok := top(m).(*confirmScreen); !ok {
+		t.Fatalf("top screen is %T; with the precondition met the question is asked as before", top(m))
+	}
+	_, cmd := m.Update(key("y"))
+	pump(m, cmd)
+	if r.testCommands() != 2 {
+		t.Errorf("%d test commands; want both tests", r.testCommands())
+	}
+	mustContain(t, "run", m.View(), "Run 1  PASS")
 }
 
 func TestProgressScreensSurviveATinyTerminal(t *testing.T) {

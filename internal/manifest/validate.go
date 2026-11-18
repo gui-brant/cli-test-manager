@@ -206,8 +206,10 @@ func (v *validator) runners() {
 		for _, e := range r.Environments {
 			if env, ok := v.m.Environments[e]; !ok {
 				v.add(where+".environments", "environment %q is not defined", e)
-			} else if !env.Allows(core.ActionRun) {
-				v.add(where+".environments", "environment %q does not allow %q, so no runner can serve it", e, core.ActionRun)
+			} else if !env.Allows(core.ActionRun) && !env.Allows(core.ActionImport) {
+				// An environment that only imports is served too: its runner names the tool
+				// whose results arrive there. The tester never starts it (see execute.prepare).
+				v.add(where+".environments", "environment %q does not allow %q or %q, so no runner can serve it", e, core.ActionRun, core.ActionImport)
 			}
 			if seen[e] {
 				v.add(where+".environments", "%q is listed twice", e)
@@ -302,6 +304,31 @@ func (v *validator) tests() {
 			v.add(where, "runner is required")
 		case !ok:
 			v.add(where, "runner %q is not defined", t.Runner)
+		}
+
+		seenSecret := make(map[string]bool)
+		for _, s := range t.Secrets {
+			switch {
+			case !varPattern.MatchString(s):
+				v.add(where+".secrets", "%q is not a valid variable name (a name only, never name=value)", s)
+			case seenSecret[s]:
+				v.add(where+".secrets", "%q is listed twice", s)
+			case v.m.Pull != nil && s == v.m.Pull.Token:
+				v.add(where+".secrets", "%q is the pull token; it must never be handed to a test command", s)
+			default:
+				for _, en := range sortedKeys(v.m.Environments) {
+					env := v.m.Environments[en]
+					if _, isVar := env.Vars[s]; isVar {
+						v.add(where+".secrets", "%q is also a variable of environment %q", s, en)
+					}
+					for _, es := range env.Secrets {
+						if es == s {
+							v.add(where+".secrets", "%q is already a secret of environment %q; list it there or here, not both", s, en)
+						}
+					}
+				}
+			}
+			seenSecret[s] = true
 		}
 
 		if why := pathProblem(t.File); why != "" {

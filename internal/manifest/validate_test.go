@@ -57,6 +57,7 @@ func TestValidateAcceptsSoundManifests(t *testing.T) {
 		"the baseline":                     func(m *core.Manifest) {},
 		"no pull section":                  func(m *core.Manifest) { m.Pull = nil },
 		"no tests yet":                     func(m *core.Manifest) { m.Tests = nil },
+		"a test with its own secrets":      func(m *core.Manifest) { m.Tests[1].Secrets = []string{"NOTE_KEY", "OTHER_KEY"} },
 		"a test in the general feature":    func(m *core.Manifest) { m.Tests[0].Feature = core.GeneralFeature },
 		"general also listed as a feature": func(m *core.Manifest) { m.Features[core.GeneralFeature] = core.FeatureSpec{} },
 		"a feature with path patterns": func(m *core.Manifest) {
@@ -64,6 +65,14 @@ func TestValidateAcceptsSoundManifests(t *testing.T) {
 		},
 		"an environment that only imports": func(m *core.Manifest) {
 			m.Environments["network"] = core.EnvironmentSpec{Actions: []core.Action{core.ActionImport}}
+		},
+		"a runner for the tool whose results arrive in an import-only environment": func(m *core.Manifest) {
+			m.Environments["network"] = core.EnvironmentSpec{Actions: []core.Action{core.ActionImport}}
+			m.Runners["loadtool"] = core.RunnerSpec{
+				Run: []string{"bash", "{files}"}, Format: core.FormatTAP, Output: core.OutputStdout,
+				Environments: []string{"network"}, Timeout: 10 * time.Minute,
+			}
+			m.Tests = append(m.Tests, core.TestSpec{ID: "load-one", Name: "Load one", Feature: "accounts", Runner: "loadtool", File: "tests/load/one.sh"})
 		},
 		"an environment that runs, pulls and imports": func(m *core.Manifest) {
 			withEnv(m, "deployed", func(e *core.EnvironmentSpec) {
@@ -117,6 +126,13 @@ func TestValidateRejects(t *testing.T) {
 			m.Features["accounts"] = core.FeatureSpec{Paths: []string{"db/*", "db/*"}}
 		}, "is listed twice"},
 
+		// a test's own secrets
+		{"test secret written as name=value", func(m *core.Manifest) { m.Tests[1].Secrets = []string{"A=B"} }, "never name=value"},
+		{"test secret listed twice", func(m *core.Manifest) { m.Tests[1].Secrets = []string{"K_ONE", "K_ONE"} }, "is listed twice"},
+		{"test secret that is the pull token", func(m *core.Manifest) { m.Tests[1].Secrets = []string{"CI_TOKEN"} }, "is the pull token"},
+		{"test secret already an environment secret", func(m *core.Manifest) { m.Tests[1].Secrets = []string{"ACCOUNT_PASSWORD"} }, "already a secret of environment"},
+		{"test secret that is an environment variable", func(m *core.Manifest) { m.Tests[1].Secrets = []string{"BASE_URL"} }, "is also a variable of environment"},
+
 		// environments
 		{"no environments", func(m *core.Manifest) { m.Environments = nil }, "at least one environment is required"},
 		{"environment with a bad name", func(m *core.Manifest) { m.Environments["Bad Env"] = core.EnvironmentSpec{} }, "is not a valid name"},
@@ -141,9 +157,9 @@ func TestValidateRejects(t *testing.T) {
 		{"action listed twice", func(m *core.Manifest) {
 			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionRun, core.ActionRun} })
 		}, "is listed twice"},
-		{"a runner serving an environment that cannot run", func(m *core.Manifest) {
-			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionImport} })
-		}, `environment "local" does not allow "run"`},
+		{"a runner serving an environment that can neither run nor import", func(m *core.Manifest) {
+			withEnv(m, "local", func(e *core.EnvironmentSpec) { e.Actions = []core.Action{core.ActionPull} })
+		}, `environment "local" does not allow "run" or "import"`},
 
 		// runners
 		{"no runners", func(m *core.Manifest) { m.Runners = nil }, "at least one runner is required"},

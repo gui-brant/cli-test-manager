@@ -138,6 +138,8 @@ type plan struct {
 	tests    []core.TestSpec
 	skipped  []SkippedTest
 	env      []string
+	extra    map[string][]string // per test id: the KEY=value lines only that test gets
+	missing  map[string][]string // per test id: its secrets that are not set
 	redactor *redact.Redactor
 	changed  *ChangedSummary
 }
@@ -322,6 +324,11 @@ func (s *Service) prepare(ctx context.Context, req Request) (*plan, error) {
 			req.Environment, strings.Join(sortedKeys(m.Environments), ", "))
 	}
 
+	if !spec.Allows(core.ActionRun) {
+		return nil, fmt.Errorf("execute: environment %q does not allow running: its results arrive from outside (tester import --env %s)",
+			req.Environment, req.Environment)
+	}
+
 	var restrict map[string]bool
 	var changed *ChangedSummary
 	if req.Select.UseChanged {
@@ -339,11 +346,11 @@ func (s *Service) prepare(ctx context.Context, req Request) (*plan, error) {
 		}
 		tests, skipped = remaining, append(skipped, left...)
 	}
-	env, redactor, problems := s.environment(ctx, m, spec)
+	res, problems := s.environment(ctx, m, spec, tests)
 	if len(problems) > 0 {
 		return nil, problemsError(problems)
 	}
-	return &plan{tests: tests, skipped: skipped, env: env, redactor: redactor, changed: changed}, nil
+	return &plan{tests: tests, skipped: skipped, env: res.env, extra: res.extra, missing: res.missing, redactor: res.scrubber, changed: changed}, nil
 }
 
 func problemsError(problems []string) error {

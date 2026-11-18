@@ -28,13 +28,22 @@ A project puts a `test-manifest.yaml` at its root. `examples/test-manifest.yaml`
 | `environments` | where tests can run (`local`, `staging`...), each with `vars` (plain values), `secrets` (**names** only, never values) and `actions`: what the tester may do there (`run`, `pull`, `import`; omitted means `run` and `pull`) |
 | `runners` | how to start a kind of test: the command as an argument list with `{files}` (and `{report}` for a result file), the result `format` (`tap` or `junit`), `output` (`stdout` or `file`), the environments it serves (each must allow `run`), a `timeout`, and an optional `version` command whose first line is recorded with every run |
 | `pull` | optional: where results produced elsewhere come from. The GitHub `repo` (`owner/name`), the `workflow`, the `artifact` name, the `environment` those results belong to (it must allow `pull`), `lookback_days` for the first pull, and `token`: the **name** of the environment variable holding a GitHub token that can read the repository's Actions (never listed as an environment secret, so tests never receive it) |
-| `tests` | the tests, in order. The order is the numbering and is append-only, so history stays readable. Each has an `id` that never changes, a `name`, a `feature`, a `runner`, a `file` and an optional `tag` |
+| `tests` | the tests, in order. The order is the numbering and is append-only, so history stays readable. Each has an `id` that never changes, a `name`, a `feature`, a `runner`, a `file`, an optional `tag`, and an optional `secrets` list (see "A test's own secrets") |
 
 | `preconditions` | optional, inside an environment, a runner or a test: what the person must have done before those tests can run. Each has a `name`, a `check` (a command as an argument list, no shell; exit 0 means ready) and a `message` telling the person what to do. See "Preconditions" below |
 
 The tester looks for the manifest in the current folder and the folders above it, unless `--manifest PATH` names it (a file or a folder).
 
 `tester check` validates the manifest and that every test file exists.
+
+## A test's own secrets
+
+An environment's `secrets` go to every test that runs there, and a missing one stops the whole run. A test can also list `secrets:` of its own (names only). Rules:
+
+- A test receives only its own secrets, plus its environment's. Another test never gets them, even when the person's shell holds them: every name declared anywhere in the manifest is removed from the environment of a command that does not own it.
+- When one of a test's secrets is not set, the run is **refused** (saved as a refused run, nothing starts), but only when that test is among the tests selected. A run of other tests is not affected. The refusal names the test and the missing names.
+- The values are scrubbed from everything stored or shown, exactly like an environment's.
+- A name may not be listed twice, may not also be an environment's secret or variable, and may not be the pull token.
 
 ## Preconditions
 

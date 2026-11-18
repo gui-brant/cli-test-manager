@@ -43,7 +43,7 @@ runners:
 tests:                                   # append-only: the order is the test numbering
   - { id: users-table, name: Users table checks, feature: accounts, runner: sql,  file: tests/sql/users_table.sql }
   - { id: login-flow,  name: Login flow,         feature: accounts, runner: http, file: tests/http/login_flow.http, tag: http }
-  - { id: note-create, name: Create a note,      feature: notes,    runner: http, file: tests/http/note_create.http }
+  - { id: note-create, name: Create a note,      feature: notes,    runner: http, file: tests/http/note_create.http, secrets: [NOTE_ADMIN_KEY] }   # secrets: only this test receives it; unset = a run that selects it is refused
 
 pull:                                    # optional: results produced elsewhere
   provider: github

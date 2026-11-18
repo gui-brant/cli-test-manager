@@ -25,6 +25,9 @@ type Refusal struct {
 	// Why is what the check itself reported: the first line it printed, or that
 	// it timed out, or its exit code. It is scrubbed of the run's secrets.
 	Why string
+	// Secret is true when this is not a precondition but a test's own secret
+	// that is not set; Name then reads "secrets of <test id>".
+	Secret bool
 }
 
 // preconditions lists the preconditions that apply to the tests about to run,
@@ -73,7 +76,9 @@ func preconditions(req Request, tests []core.TestSpec) []core.Precondition {
 // Checks only look, so running them more than once (a preview, then the run)
 // is safe.
 func (s *Service) unmet(ctx context.Context, req Request, p *plan) ([]Refusal, error) {
-	var refusals []Refusal
+	// A selected test whose own secret is not set cannot run, so the run is
+	// refused with the rest. Nothing is started to find that out.
+	refusals := p.secretRefusals()
 	for _, pre := range preconditions(req, p.tests) {
 		out, err := s.Runner.Run(ctx, core.Invocation{Args: pre.Check, Env: p.env, Dir: req.Root, Timeout: preconditionTimeout})
 		if err != nil {
@@ -110,6 +115,10 @@ func (p *plan) checkSaid(out core.Output) string {
 func RefusalText(refusals []Refusal) string {
 	blocks := make([]string, 0, len(refusals))
 	for _, r := range refusals {
+		if r.Secret {
+			blocks = append(blocks, fmt.Sprintf("%s: %s\n  %s", r.Name, r.Message, r.Why))
+			continue
+		}
 		blocks = append(blocks, fmt.Sprintf("precondition %s is not met: %s\n  the check said: %s", r.Name, r.Message, r.Why))
 	}
 	return strings.Join(blocks, "\n\n")

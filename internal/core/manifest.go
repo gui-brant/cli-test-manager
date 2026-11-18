@@ -168,6 +168,11 @@ type TestSpec struct {
 	// Preconditions must hold before this test starts. They are checked only
 	// when the test is about to run.
 	Preconditions []Precondition `yaml:"preconditions,omitempty"`
+	// Secrets are the NAMES of secret variables this test alone receives, on top
+	// of its environment's. Other tests never get them, even when the person's
+	// shell holds them. When one is not set the run is refused, and only when
+	// this test is among the tests selected: a run of other tests is not affected.
+	Secrets []string `yaml:"secrets,omitempty"`
 }
 
 // PullSpec says where results produced elsewhere can be fetched.

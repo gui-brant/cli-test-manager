@@ -33,7 +33,7 @@ func (s *Service) runOne(ctx context.Context, req Request, p *plan, t core.TestS
 	rs := req.Manifest.Runners[t.Runner]
 	inv := core.Invocation{
 		Args:        expand(rs.Run, t.File),
-		Env:         p.env,
+		Env:         p.testEnv(t),
 		Dir:         req.Root,
 		Timeout:     rs.Timeout,
 		WantsReport: rs.Output == core.OutputFile,
